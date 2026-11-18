@@ -1,4 +1,4 @@
-<img width="100" height="120" alt="IMG_1424" src="https://github.com/user-attachments/assets/0bb80dc7-7941-47b6-a0d6-28149cad77a5" />
+<img width="100" height="120" alt="IMG_1424" src="https://github.com/user-attachments/assets/0bb80dc7-7941-47b6-a0d6-28149cad77a5" /> ...
 
 By Team Unity.X (Sheenam, Madhu, Claudia, Saba, and Tushar)
 
