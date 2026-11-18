@@ -2,7 +2,7 @@
 
 By Team Unity.X (Sheenam, Madhu, Claudia, Saba, and Tushar)
 
-What is it? Wakie is an alarm app with a twist for people who just can't stop hitting snooze. We replaced the boring off button with actual wake-up challenges that force you to get up, move around, and kick-start your morning.
+What is it? Wakie is an alarm app with a twist for people who just can't stop hitting snooze. We replaced the boring off button with actual wake-up challenges that force you to get up, move around, and kick-start your every morning.
 
 The Challenges:
 
