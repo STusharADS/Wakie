@@ -15,4 +15,4 @@ The Challenges:
 * **Blah Blah:** You have to talk for 30 seconds straight. We record your sleepy morning rambles and save them for you to listen to later.
 
 <img width="1061" height="575" alt="image" src="https://github.com/user-attachments/assets/9341b75c-6198-45f3-ba3f-d2a93adfccff" />
-
+...
