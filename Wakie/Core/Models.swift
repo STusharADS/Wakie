@@ -336,6 +336,37 @@ nonisolated struct WorldCity: Codable, Identifiable, Hashable, Sendable {
         (id.split(separator: "/").last.map(String.init) ?? id).replacingOccurrences(of: "_", with: " ")
     }
 
+    /// Finds the ISO region code for a country name such as "India" (in English or the
+    /// phone's language). Used when Maps doesn't return a code, e.g. for Jammu.
+    static func regionCode(forCountryName name: String) -> String? {
+        let target = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !target.isEmpty else { return nil }
+        let locales = [Locale.current, Locale(identifier: "en_US")]
+        for region in Locale.Region.isoRegions {
+            let code = region.identifier
+            // Skip continents and other numeric groupings.
+            guard code.count == 2, code.allSatisfy(\.isLetter) else { continue }
+            if code.lowercased() == target { return code }
+            for locale in locales where locale.localizedString(forRegionCode: code)?.lowercased() == target {
+                return code
+            }
+        }
+        return nil
+    }
+
+    /// Flag for a country name, or the globe if it can't be matched.
+    static func flag(forCountryName name: String) -> String {
+        regionCode(forCountryName: name).map(flag(forRegionCode:)) ?? "🌍"
+    }
+
+    /// Best flag for a place: from its country name, else borrowed from another known
+    /// city in the same time zone (e.g. Jammu shares Asia/Kolkata with Kolkata and Chennai).
+    static func bestFlag(country: String, timeZoneID: String, knownCities: [WorldCity]) -> String {
+        let byName = flag(forCountryName: country)
+        if byName != "🌍" { return byName }
+        return knownCities.first { $0.timeZoneID == timeZoneID && $0.flag != "🌍" }?.flag ?? "🌍"
+    }
+
     /// Turns an ISO region code like "IT" into its flag emoji.
     static func flag(forRegionCode code: String) -> String {
         let base: UInt32 = 0x1F1E6 - 65 // regional indicator "A" minus ASCII "A"
@@ -350,10 +381,22 @@ nonisolated struct WorldCity: Codable, Identifiable, Hashable, Sendable {
     ]
 }
 
-/// The phone's own location, described from its time zone and region settings.
+/// The phone's own location. Uses the World Clock city in the phone's time zone when
+/// there is one (e.g. Naples for Europe/Rome), so the name and flag match where you are.
+/// The phone's region setting isn't used: it describes language/format, not location.
 nonisolated enum LocalPlace {
-    static var name: String { WorldCity.cityName(fromTimeZoneID: TimeZone.current.identifier) }
-    static var flag: String { Locale.current.region.map { WorldCity.flag(forRegionCode: $0.identifier) } ?? "📍" }
+    /// The saved World Clock city sharing the phone's time zone, if any.
+    static var matchingCity: WorldCity? {
+        let saved = UserDefaults.standard.data(forKey: "cities")
+            .flatMap { try? JSONDecoder().decode([WorldCity].self, from: $0) } ?? WorldCity.defaults
+        return saved.first { $0.timeZoneID == TimeZone.current.identifier }
+    }
+
+    static var name: String {
+        matchingCity?.name ?? WorldCity.cityName(fromTimeZoneID: TimeZone.current.identifier)
+    }
+
+    static var flag: String { matchingCity?.flag ?? "📍" }
     static var label: String { "\(flag) \(name)" }
 }
 

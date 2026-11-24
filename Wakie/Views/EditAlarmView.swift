@@ -17,6 +17,7 @@ struct EditAlarmView: View {
     @State private var periodIndex: Int    // 0 = AM, 1 = PM
     @State private var confirmDelete = false
     @State private var isPickingSound = false
+    @State private var isAddingCity = false
     let isNew: Bool
 
     private static let hourLabels = (1...12).map { String(format: "%02d", $0) }
@@ -64,7 +65,7 @@ struct EditAlarmView: View {
 
     private var header: some View {
         HStack {
-            CircleIconButton(systemName: "chevron.left") { dismiss() }
+            CircleIconButton(systemName: "xmark") { dismiss() }
                 .accessibilityLabel("Cancel")
             Spacer()
             Text(isNew ? "New Alarm" : "Edit Alarm")
@@ -125,7 +126,8 @@ struct EditAlarmView: View {
     private var zoneSelection: Binding<String> {
         Binding(
             get: {
-                guard draft.timeZoneID != nil else { return "local" }
+                // An alarm on the phone's own clock shows as the matching city (e.g. Naples).
+                guard draft.timeZoneID != nil else { return LocalPlace.matchingCity?.id ?? "local" }
                 return model.cities.first { $0.timeZoneID == draft.timeZoneID && $0.name == draft.placeName }?.id ?? "local"
             },
             set: { key in
@@ -169,13 +171,18 @@ struct EditAlarmView: View {
     private var zonePicker: some View {
         Menu {
             Picker("Time zone", selection: zoneSelection) {
-                Text("\(LocalPlace.label) (here)").tag("local")
+                // Only needed when none of the World Clock cities is where you are.
+                if LocalPlace.matchingCity == nil {
+                    Text("📍 My time").tag("local")
+                }
                 ForEach(model.cities) { city in
                     Text("\(city.flag) \(city.name)").tag(city.id)
                 }
             }
-            if model.cities.isEmpty {
-                Text("Add cities in World Clock to see more")
+            Divider()
+            // Same flow as the World Clock tab; the new city is also added there.
+            Button("Add a City…", systemImage: "plus.circle") {
+                isAddingCity = true
             }
         } label: {
             HStack(spacing: 6) {
@@ -191,6 +198,13 @@ struct EditAlarmView: View {
             .background(Capsule().fill(Theme.lavenderPill))
         }
         .accessibilityLabel("Alarm time zone, \(draft.placeLabel)")
+        .sheet(isPresented: $isAddingCity) {
+            AddCitySheet { city in
+                // Use the city just added for this alarm.
+                zoneSelection.wrappedValue = city.id
+            }
+            .presentationDetents([.medium])
+        }
     }
 
     // MARK: Repeat

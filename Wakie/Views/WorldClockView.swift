@@ -265,6 +265,9 @@ struct FlightPath: View {
 /// Asks for a city and country, looks up its time zone and flag, and lets the
 /// person attach a photo of the place from their library.
 struct AddCitySheet: View {
+    /// Called with the new city after it's saved (e.g. to pick it for an alarm).
+    var onAdded: ((WorldCity) -> Void)? = nil
+
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
@@ -525,10 +528,15 @@ struct AddCitySheet: View {
         for item in items {
             guard let zone = item.timeZone else { continue }
             let address = item.addressRepresentations
+            let country = address?.regionName ?? typedCountry
+            // Maps sometimes has no region code (e.g. Jammu), so fall back to the country name.
+            let flag = address?.region.map { WorldCity.flag(forRegionCode: $0.identifier) }
+                ?? WorldCity.bestFlag(country: country, timeZoneID: zone.identifier,
+                                      knownCities: model.cities + WorldCity.defaults)
             let match = PlaceMatch(
                 name: address?.cityName ?? typedCity,
-                country: address?.regionName ?? typedCountry,
-                flag: address?.region.map { WorldCity.flag(forRegionCode: $0.identifier) } ?? "🌍",
+                country: country,
+                flag: flag,
                 timeZoneID: zone.identifier
             )
             if !matches.contains(match) { matches.append(match) }
@@ -547,6 +555,7 @@ struct AddCitySheet: View {
             }
         }
         model.addCity(city)
+        onAdded?(city)
         dismiss()
     }
 }

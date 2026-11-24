@@ -59,9 +59,25 @@ final class AppModel {
 
     private init() {
         let d = UserDefaults.standard
-        alarms = Self.load([WakieAlarm].self, from: d, key: Keys.alarms) ?? []
+        // Alarms keep their own copy of the place's flag; repair missing ones using the city's country.
+        let savedCities = Self.load([WorldCity].self, from: d, key: Keys.cities) ?? WorldCity.defaults
+        alarms = (Self.load([WakieAlarm].self, from: d, key: Keys.alarms) ?? []).map { alarm in
+            guard alarm.placeFlag == "🌍", let name = alarm.placeName,
+                  let city = savedCities.first(where: { $0.name == name && $0.timeZoneID == alarm.timeZoneID }) else { return alarm }
+            var fixed = alarm
+            fixed.placeFlag = WorldCity.bestFlag(country: city.country, timeZoneID: city.timeZoneID,
+                                                 knownCities: savedCities + WorldCity.defaults)
+            return fixed
+        }
         stats = Self.load(WakeStats.self, from: d, key: Keys.stats) ?? WakeStats()
-        cities = Self.load([WorldCity].self, from: d, key: Keys.cities) ?? WorldCity.defaults
+        // Repair cities saved without a flag (Maps gave no region code) using their country name.
+        cities = savedCities.map { city in
+            guard city.flag == "🌍" else { return city }
+            var fixed = city
+            fixed.flag = WorldCity.bestFlag(country: city.country, timeZoneID: city.timeZoneID,
+                                            knownCities: savedCities + WorldCity.defaults)
+            return fixed
+        }
         pickItems = Self.load([PickItem].self, from: d, key: Keys.pickItems) ?? PickItem.defaults
         danceSeconds = min(max(d.object(forKey: Keys.danceSeconds) as? Int ?? 20, Self.missionSecondsRange.lowerBound), Self.missionSecondsRange.upperBound)
         talkSeconds = min(max(d.object(forKey: Keys.talkSeconds) as? Int ?? 30, Self.missionSecondsRange.lowerBound), Self.missionSecondsRange.upperBound)
@@ -355,6 +371,19 @@ final class AppModel {
 
     func restorePickItems() {
         pickItems = PickItem.defaults
+    }
+
+    /// Items that were removed; shown greyed out so each can be brought back on its own.
+    var removedPickItems: [PickItem] {
+        PickItem.defaults.filter { !pickItems.contains($0) }
+    }
+
+    /// Brings back one removed item, in its usual place in the list.
+    func restorePickItem(_ item: PickItem) {
+        guard !pickItems.contains(item) else { return }
+        pickItems.append(item)
+        let order = PickItem.defaults.map(\.name)
+        pickItems.sort { (order.firstIndex(of: $0.name) ?? .max) < (order.firstIndex(of: $1.name) ?? .max) }
     }
 
     // MARK: - Recordings

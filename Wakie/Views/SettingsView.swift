@@ -141,46 +141,70 @@ struct SettingsView: View {
                     .font(.wakie(15, .bold))
                     .foregroundStyle(Theme.ink)
                 ForEach(model.pickItems) { item in
-                    HStack(spacing: 12) {
-                        Text(item.emoji)
-                            .font(.system(size: 22))
-                        Text(item.name)
-                            .font(.wakie(16, .semibold))
-                            .foregroundStyle(Theme.ink)
-                        Spacer()
-                        Button {
-                            withAnimation(.snappy) { model.removePickItem(item) }
-                        } label: {
-                            Image(systemName: "minus.circle.fill")
-                                .font(.system(size: 22))
-                                .foregroundStyle(model.pickItems.count > 1 ? Theme.danger : Theme.inkSecondary.opacity(0.4))
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(model.pickItems.count <= 1)
-                        .accessibilityLabel("Remove \(item.name)")
-                    }
-                    .padding(.horizontal, 14)
-                    .frame(height: 46)
-                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.inset))
+                    pickItemRow(item, isActive: true)
                 }
                 if model.pickItems.count <= 1 {
                     Text("Keep at least one item so there's always something to find.")
                         .font(.wakie(12, .semibold))
                         .foregroundStyle(Theme.inkSecondary)
                 }
-                if model.pickItems.count < PickItem.defaults.count {
-                    Button {
-                        withAnimation(.snappy) { model.restorePickItems() }
-                    } label: {
-                        Label("Restore all items", systemImage: "arrow.counterclockwise")
-                            .font(.wakie(14, .bold))
-                            .foregroundStyle(Theme.purple)
+                // Removed items stay visible, greyed out at the bottom, each with its own restore button.
+                if !model.removedPickItems.isEmpty {
+                    Text("Removed")
+                        .font(.wakie(13, .bold))
+                        .foregroundStyle(Theme.inkSecondary)
+                        .padding(.top, 6)
+                    ForEach(model.removedPickItems) { item in
+                        pickItemRow(item, isActive: false)
                     }
-                    .buttonStyle(.plain)
-                    .padding(.top, 4)
+                    if model.removedPickItems.count > 1 {
+                        Button {
+                            withAnimation(.snappy) { model.restorePickItems() }
+                        } label: {
+                            Label("Restore all items", systemImage: "arrow.counterclockwise")
+                                .font(.wakie(14, .bold))
+                                .foregroundStyle(Theme.purple)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 4)
+                    }
                 }
             }
         }
+    }
+
+    /// One item row. Active rows can be removed; removed rows are greyed and can be restored.
+    private func pickItemRow(_ item: PickItem, isActive: Bool) -> some View {
+        let canRemove = model.pickItems.count > 1
+        return HStack(spacing: 12) {
+            Text(item.emoji)
+                .font(.system(size: 22))
+                .grayscale(isActive ? 0 : 1)
+            Text(item.name)
+                .font(.wakie(16, .semibold))
+                .foregroundStyle(isActive ? Theme.ink : Theme.inkSecondary)
+                .strikethrough(!isActive, color: Theme.inkSecondary)
+            Spacer()
+            Button {
+                withAnimation(.snappy) {
+                    if isActive { model.removePickItem(item) } else { model.restorePickItem(item) }
+                }
+            } label: {
+                Image(systemName: isActive ? "minus.circle.fill" : "plus.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(isActive
+                                     ? (canRemove ? Theme.danger : Theme.inkSecondary.opacity(0.4))
+                                     : Color.green)
+            }
+            .buttonStyle(.plain)
+            .disabled(isActive && !canRemove)
+            .accessibilityLabel(isActive ? "Remove \(item.name)" : "Restore \(item.name)")
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 46)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.inset))
+        .opacity(isActive ? 1 : 0.55)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     // MARK: Blah-Blah
@@ -314,4 +338,11 @@ struct RecordingRow: View {
 #Preview {
     SettingsView()
         .environment(AppModel.shared)
+}
+
+#Preview("Some items removed") {
+    let model = AppModel.shared
+    model.pickItems = PickItem.defaults.filter { !["Fork", "Book"].contains($0.name) }
+    return SettingsView()
+        .environment(model)
 }

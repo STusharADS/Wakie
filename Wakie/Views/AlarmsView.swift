@@ -202,7 +202,8 @@ struct AlarmZonesView: View {
     private var rows: [Row] {
         var rows = [Row(id: "local", flag: LocalPlace.flag, name: "\(LocalPlace.name) (you)",
                         timeZone: .current, isAlarmPlace: alarm.timeZoneID == nil)]
-        for city in model.cities {
+        // The local row already covers the city you're in.
+        for city in model.cities where city.id != LocalPlace.matchingCity?.id {
             rows.append(Row(id: city.id, flag: city.flag, name: city.name, timeZone: city.timeZone,
                             isAlarmPlace: city.timeZoneID == alarm.timeZoneID && city.name == alarm.placeName))
         }
