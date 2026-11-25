@@ -34,7 +34,24 @@ enum AlarmScheduler {
         }
     }
 
-    /// Schedules (or re-schedules) a repeating or one-off alarm at its wall-clock time.
+    /// Extra rings after the main one: if the system alert is stopped without doing the
+    /// challenge, the alarm sounds again 30 seconds later, and again, for two minutes.
+    /// Starting the challenge cancels them.
+    static let chainLength = 4
+    static let chainInterval: TimeInterval = 30
+
+    /// Stable IDs for an alarm's extra rings, derived from the alarm's own ID.
+    static func chainIDs(for id: UUID) -> [UUID] {
+        (1...chainLength).map { index in
+            var bytes = id.uuid
+            bytes.14 ^= 0x5C
+            bytes.15 ^= UInt8(0xA0 + index)
+            return UUID(uuid: bytes)
+        }
+    }
+
+    /// Schedules (or re-schedules) a repeating or one-off alarm at its wall-clock time,
+    /// plus the extra rings that follow its next occurrence.
     static func schedule(_ alarm: WakieAlarm) async throws {
         cancel(alarm.id)
         // AlarmKit schedules against the phone's clock, so convert alarms set in another time zone.
@@ -52,6 +69,17 @@ enum AlarmScheduler {
             snoozeMinutes: alarm.snoozeMinutes,
             soundFile: alarm.soundFile
         )
+        guard let fire = alarm.nextFireDate() else { return }
+        for (index, chainID) in chainIDs(for: alarm.id).enumerated() {
+            try await register(
+                id: chainID,
+                schedule: .fixed(fire.addingTimeInterval(chainInterval * Double(index + 1))),
+                sourceAlarmID: alarm.id,
+                mission: alarm.mission,
+                snoozeMinutes: 0,
+                soundFile: alarm.soundFile
+            )
+        }
     }
 
     /// Schedules a one-time follow-up alarm (used for the single snooze and the mission backup).
@@ -76,6 +104,8 @@ enum AlarmScheduler {
         snoozeMinutes: Int,
         soundFile: String?
     ) async throws {
+        // The default tone is generated on first launch; make sure it's there before AlarmKit needs it.
+        await Task.detached(priority: .userInitiated) { ToneLibrary.ensureGenerated() }.value
         let allowsSnooze = snoozeMinutes > 0
         let alert = AlarmPresentation.Alert(
             title: "Time to wake up! \(mission.title)",
@@ -92,18 +122,32 @@ enum AlarmScheduler {
         let configuration = AlarmManager.AlarmConfiguration<WakieAlarmMetadata>.alarm(
             schedule: schedule,
             attributes: attributes,
+            // Ties the system alarm (and its snooze/backup follow-ups) to the Wakie alarm Siri
+            // knows about, so requests like "stop the alarm" or "change my alarm" reach Wakie.
+            appEntityIdentifier: EntityIdentifier(for: WakieAlarmEntity.self, identifier: sourceAlarmID),
             stopIntent: StartMissionIntent(alarmID: sourceAlarmID.uuidString, kitAlarmID: id.uuidString),
             secondaryIntent: allowsSnooze
                 ? SnoozeOnceIntent(alarmID: sourceAlarmID.uuidString, kitAlarmID: id.uuidString)
                 : nil,
             // Custom sounds live in Library/Sounds, where AlarmKit looks them up by name.
-            sound: soundFile.map { .named($0) } ?? .default
+            // With no pick, Wakie's own loud tone plays instead of the quieter system sound.
+            sound: .named(soundFile ?? ToneLibrary.defaultAlarmFile)
         )
         _ = try await manager.schedule(id: id, configuration: configuration)
     }
 
+    /// Cancels an alarm and its extra rings.
     static func cancel(_ id: UUID) {
         try? manager.cancel(id: id)
+        cancelChain(id)
+    }
+
+    /// Cancels only the extra rings, e.g. once the challenge has started.
+    static func cancelChain(_ id: UUID) {
+        for chainID in chainIDs(for: id) {
+            stopIfAlerting(chainID)
+            try? manager.cancel(id: chainID)
+        }
     }
 
     /// Silences an alarm only if it's ringing right now, so future repeats stay intact.

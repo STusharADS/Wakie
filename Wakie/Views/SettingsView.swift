@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var isPickingSong = false
     @State private var isImportingSong = false
     @State private var importError: String?
+    @State private var isPickingAppleMusic = false
 
     var body: some View {
         @Bindable var model = model
@@ -24,6 +25,7 @@ struct SettingsView: View {
                 shakySection(seconds: $model.danceSeconds)
                 blahSection(seconds: $model.talkSeconds)
                 pickieSection
+                easyPickingSection(isOn: $model.easyTimePicking)
             }
             .padding(.horizontal, 20)
             .padding(.top, 8)
@@ -46,6 +48,12 @@ struct SettingsView: View {
                 isImportingSong = false
             }
         }
+        .sheet(isPresented: $isPickingAppleMusic) {
+            AppleMusicPickerSheet { song in
+                player.stop()
+                withAnimation(.snappy) { model.selectAppleMusicDanceSong(song) }
+            }
+        }
         .alert("Couldn't add song", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -64,72 +72,160 @@ struct SettingsView: View {
         }
     }
 
-    /// The song that plays while dancing, picked from the Files app.
+    /// The song that plays while dancing: a built-in track, a file, or an Apple Music song.
     private var danceMusicRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("Dance music")
                 .font(.wakie(15, .bold))
                 .foregroundStyle(Theme.ink)
-            HStack(spacing: 12) {
-                if let url = model.danceSongURL, let file = model.danceSongFile {
-                    Button {
-                        player.toggle(url)
-                    } label: {
-                        Image(systemName: player.playingURL == url ? "pause.fill" : "play.fill")
-                            .font(.system(size: 14, weight: .black))
-                            .foregroundStyle(Color(hex: 0x1E1A3C))
-                            .frame(width: 36, height: 36)
-                            .background(Circle().fill(Theme.yellow))
+            currentDanceSong
+            Text("Free Wakie tracks")
+                .font(.wakie(12, .heavy))
+                .foregroundStyle(Theme.inkSecondary)
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    ForEach(ToneLibrary.danceTracks) { track in
+                        builtInTrackChip(track)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(player.playingURL == url ? "Pause song" : "Play song")
-                    Text(AudioImporter.title(forFile: file))
+                }
+            }
+            .scrollIndicators(.hidden)
+            HStack(spacing: 10) {
+                sourceButton(title: "From Files", systemImage: "folder.fill", isBusy: isImportingSong) {
+                    isPickingSong = true
+                }
+                sourceButton(title: "Apple Music", systemImage: "music.note", isBusy: false) {
+                    isPickingAppleMusic = true
+                }
+            }
+        }
+    }
+
+    /// What's picked right now, with a preview button for files and a way to clear it.
+    private var currentDanceSong: some View {
+        HStack(spacing: 12) {
+            if let song = model.danceAppleMusicSong {
+                Image(systemName: "music.note")
+                    .font(.system(size: 15, weight: .black))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(Color(red: 0.98, green: 0.24, blue: 0.35)))
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(song.title)
                         .font(.wakie(14, .bold))
                         .foregroundStyle(Theme.ink)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    Button {
-                        player.stop()
-                        withAnimation(.snappy) { model.removeDanceSong() }
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(Theme.danger)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Remove song")
-                } else {
-                    Image(systemName: "music.note")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(Theme.purple)
-                        .frame(width: 36, height: 36)
-                    Text("No song. Dance to your own beat!")
-                        .font(.wakie(13, .semibold))
+                    Text("\(song.artist) · Apple Music")
+                        .font(.wakie(11, .semibold))
                         .foregroundStyle(Theme.inkSecondary)
-                    Spacer(minLength: 4)
                 }
+                .lineLimit(1)
+            } else if let url = model.danceSongURL, let file = model.danceSongFile {
                 Button {
-                    isPickingSong = true
+                    player.toggle(url)
                 } label: {
-                    if isImportingSong {
-                        ProgressView()
-                    } else {
-                        Text(model.danceSongFile == nil ? "Choose" : "Change")
-                            .font(.wakie(13, .bold))
-                            .foregroundStyle(Theme.ink)
-                            .padding(.horizontal, 14)
-                            .frame(height: 36)
-                            .contentShape(Capsule())
-                    }
+                    Image(systemName: player.playingURL == url ? "pause.fill" : "play.fill")
+                        .font(.system(size: 14, weight: .black))
+                        .foregroundStyle(Color(hex: 0x1E1A3C))
+                        .frame(width: 36, height: 36)
+                        .background(Circle().fill(Theme.yellow))
                 }
                 .buttonStyle(.plain)
-                .glassEffect(.regular.tint(Theme.purple.opacity(0.25)).interactive(), in: .capsule)
-                .disabled(isImportingSong)
+                .accessibilityLabel(player.playingURL == url ? "Pause song" : "Play song")
+                Text(ToneLibrary.title(forFile: file) ?? AudioImporter.title(forFile: file))
+                    .font(.wakie(14, .bold))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+            } else {
+                Image(systemName: "music.note")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Theme.purple)
+                    .frame(width: 36, height: 36)
+                Text("No song. Dance to your own beat!")
+                    .font(.wakie(13, .semibold))
+                    .foregroundStyle(Theme.inkSecondary)
             }
-            .padding(.horizontal, 12)
-            .frame(height: 54)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.inset))
+            Spacer(minLength: 4)
+            if model.danceSongFile != nil || model.danceAppleMusicSong != nil {
+                Button {
+                    player.stop()
+                    withAnimation(.snappy) { model.removeDanceSong() }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(Theme.inkSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove song")
+            }
         }
+        .padding(.horizontal, 12)
+        .frame(height: 54)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.inset))
+    }
+
+    private func builtInTrackChip(_ track: ToneLibrary.Tone) -> some View {
+        let isSelected = model.danceSongFile == track.file
+        return Button {
+            if !isSelected { withAnimation(.snappy) { model.selectBuiltInDanceTrack(track.file) } }
+            // Tapping a track previews it (tap again to stop).
+            player.toggle(AudioImporter.danceMusicDirectory.appending(path: track.file))
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "play.circle.fill")
+                Text(track.title)
+            }
+            .font(.wakie(13, .bold))
+            .foregroundStyle(isSelected ? Color(hex: 0x1E1A3C) : Theme.ink)
+            .padding(.horizontal, 12)
+            .frame(height: 36)
+            .background(Capsule().fill(isSelected ? Theme.yellow : Theme.lavenderPill))
+        }
+        .buttonStyle(PressableStyle())
+        .sensoryFeedback(.selection, trigger: isSelected)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func sourceButton(title: String, systemImage: String, isBusy: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if isBusy { ProgressView() } else { Image(systemName: systemImage) }
+                Text(title)
+            }
+            .font(.wakie(13, .bold))
+            .foregroundStyle(Theme.ink)
+            .frame(maxWidth: .infinity)
+            .frame(height: 40)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .capsule)
+        .disabled(isBusy)
+    }
+
+    // MARK: Accessibility
+
+    /// Switches small sliders for big horizontal wheels across the app.
+    private func easyPickingSection(isOn: Binding<Bool>) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: "hand.point.up.left.and.text.fill")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(Theme.purple)
+                .frame(width: 40, height: 40)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Easy time picking")
+                    .font(.wakie(17, .heavy))
+                    .foregroundStyle(Theme.ink)
+                Text("Accessibility feature for Tremor's disorder")
+                    .font(.wakie(13, .semibold))
+                    .foregroundStyle(Theme.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 4)
+            PillSwitch(isOn: isOn)
+                .accessibilityLabel("Easy time picking")
+        }
+        .padding(18)
+        .liquidGlassCard(radius: 24)
     }
 
     // MARK: Pickie-Picky
@@ -258,14 +354,23 @@ struct MissionSettingsCard<Content: View>: View {
             content
         }
         .padding(18)
-        .wakieCard(radius: 28)
+        .liquidGlassCard(radius: 28)
     }
 }
 
+/// Slider for a mission's length. Changes are confirmed in a pop-up when the finger lifts.
 struct DurationSlider: View {
     let title: String
     @Binding var seconds: Int
     let range: ClosedRange<Int>
+
+    @Environment(AppModel.self) private var model
+
+    /// What the slider shows while dragging and while the confirmation is up.
+    @State private var draft: Int?
+    @State private var isConfirming = false
+
+    private var shown: Int { draft ?? seconds }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -274,13 +379,48 @@ struct DurationSlider: View {
                     .font(.wakie(15, .bold))
                     .foregroundStyle(Theme.ink)
                 Spacer()
-                Text("\(seconds)s")
+                Text("\(shown)s")
                     .font(.wakie(15, .heavy))
                     .foregroundStyle(Theme.purple)
                     .contentTransition(.numericText())
             }
+            if model.easyTimePicking {
+                HorizontalWheelPicker(
+                    values: Array(stride(from: range.lowerBound, through: range.upperBound, by: 5)),
+                    selection: Binding(get: { shown }, set: { draft = $0 }),
+                    accessibilityName: title,
+                    label: { "\($0)s" },
+                    onSettled: askToConfirm
+                )
+            } else {
+                slider
+            }
+        }
+        .alert("Change \(title.lowercased()) to \(shown) seconds?", isPresented: $isConfirming) {
+            Button("Change") {
+                if let draft { seconds = draft }
+                draft = nil
+            }
+            Button("Cancel", role: .cancel) {
+                withAnimation(.snappy) { draft = nil }
+            }
+        } message: {
+            Text("Your alarms will use this from now on.")
+        }
+    }
+
+    /// Asks only if the value actually changed.
+    private func askToConfirm() {
+        if let draft, draft != seconds {
+            isConfirming = true
+        } else {
+            draft = nil
+        }
+    }
+
+    private var slider: some View {
             Slider(
-                value: Binding(get: { Double(seconds) }, set: { seconds = Int($0.rounded()) }),
+                value: Binding(get: { Double(shown) }, set: { draft = Int($0.rounded()) }),
                 in: Double(range.lowerBound)...Double(range.upperBound),
                 step: 5
             ) {
@@ -289,9 +429,12 @@ struct DurationSlider: View {
                 Text("\(range.lowerBound)s").font(.wakie(11, .semibold)).foregroundStyle(Theme.inkSecondary)
             } maximumValueLabel: {
                 Text("\(range.upperBound)s").font(.wakie(11, .semibold)).foregroundStyle(Theme.inkSecondary)
+            } onEditingChanged: { editing in
+                // Ask once the finger lifts.
+                if !editing { askToConfirm() }
             }
             .tint(Theme.purple)
-        }
+            .sensoryFeedback(.selection, trigger: shown)
     }
 }
 
@@ -343,6 +486,13 @@ struct RecordingRow: View {
 #Preview("Some items removed") {
     let model = AppModel.shared
     model.pickItems = PickItem.defaults.filter { !["Fork", "Book"].contains($0.name) }
+    return SettingsView()
+        .environment(model)
+}
+
+#Preview("Easy time picking") {
+    let model = AppModel.shared
+    model.easyTimePicking = true
     return SettingsView()
         .environment(model)
 }

@@ -26,6 +26,14 @@ struct WorldClockView: View {
                                 isEditing: isEditing,
                                 onDelete: { withAnimation(.bouncy) { model.removeCity(city) } }
                             )
+                            // Swipe left to delete, like the Alarms tab.
+                            .swipeActions(edge: .trailing, allowsFullSwipe: !isEditing) {
+                                Button(role: .destructive) {
+                                    withAnimation(.bouncy) { model.removeCity(city) }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                             .transition(.scale(scale: 0.85).combined(with: .opacity))
                         }
                         .reorderable()
@@ -57,6 +65,7 @@ struct WorldClockView: View {
             .padding(.bottom, 110)
         }
         .scrollIndicators(.hidden)
+        .swipeActionsContainer()
         .background {
             // Fixed decoration: stays put while the cities scroll over it.
             ZStack(alignment: .bottom) {
@@ -100,9 +109,11 @@ struct EditableCityRow: View {
     let onDelete: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(AppModel.self) private var model
+    @State private var isPickingPhoto = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var isFetchingPhoto = false
 
-    /// Playful resting tilt outside edit mode.
-    private var restingTilt: Double { index.isMultiple(of: 2) ? -1.5 : 1 }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -126,13 +137,37 @@ struct EditableCityRow: View {
             }
         }
         .modifier(Wobble(isActive: isEditing && !reduceMotion, seed: Double(index)))
-        .rotationEffect(.degrees(isEditing ? 0 : restingTilt))
+        // No resting tilt: the cards are Liquid Glass, which renders cleanly only when unrotated.
         .scaleEffect(isEditing ? 0.98 : 1)
         .animation(.spring(response: 0.4, dampingFraction: 0.6), value: isEditing)
+        .overlay(alignment: .trailing) {
+            if isFetchingPhoto {
+                ProgressView()
+                    .padding(.trailing, 24)
+            }
+        }
         .contextMenu {
             // Long-press is used for dragging while editing.
             if !isEditing {
+                Button("Choose from Photos", systemImage: "photo.on.rectangle") { isPickingPhoto = true }
+                Button("Find a Photo Online", systemImage: "globe") {
+                    isFetchingPhoto = true
+                    Task {
+                        await model.fetchPhoto(for: city.id)
+                        isFetchingPhoto = false
+                    }
+                }
                 Button("Remove \(city.name)", systemImage: "trash", role: .destructive, action: onDelete)
+            }
+        }
+        .photosPicker(isPresented: $isPickingPhoto, selection: $photoItem, matching: .images)
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self) {
+                    model.setPhoto(data: data, for: city.id)
+                }
+                photoItem = nil
             }
         }
     }
@@ -193,7 +228,7 @@ struct CityCard: View {
                 )
         }
         .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-        .wakieCard(radius: 28)
+        .liquidGlassCard(radius: 28)
         .accessibilityElement(children: .combine)
     }
 }
@@ -218,7 +253,7 @@ struct CityBanner: View {
     let city: WorldCity
 
     var body: some View {
-        if let url = city.photoURL, let image = UIImage(contentsOfFile: url.path()) {
+        if let url = city.photoURL, let image = UIImage(contentsOfFile: url.path(percentEncoded: false)) {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFill()
@@ -228,10 +263,12 @@ struct CityBanner: View {
                 .scaledToFill()
         } else {
             ZStack {
-                LinearGradient(colors: [Theme.lavender, Theme.purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+                // Soft placeholder while the city's photo loads.
+                LinearGradient(colors: [Theme.lavender.opacity(0.25), Theme.purple.opacity(0.2)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
                 Image(systemName: "building.2.fill")
                     .font(.system(size: 60))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(.white.opacity(0.35))
                     .offset(x: 30, y: 14)
             }
         }
@@ -494,7 +531,7 @@ struct AddCitySheet: View {
                 Text("Photo of the place")
                     .font(.wakie(15, .bold))
                     .foregroundStyle(Theme.ink)
-                Text(photo == nil ? "Optional · from your library" : "Shown on the city's card")
+                Text(photo == nil ? "Optional · we'll find one online if you skip" : "Shown on the city's card")
                     .font(.wakie(12, .semibold))
                     .foregroundStyle(Theme.inkSecondary)
             }
@@ -562,12 +599,15 @@ struct AddCitySheet: View {
 
 extension UIImage {
     /// Shrinks large library photos so card banners stay light on memory and disk.
-    func downscaled(maxDimension: CGFloat) -> UIImage {
+    nonisolated func downscaled(maxDimension: CGFloat) -> UIImage {
         let longest = max(size.width, size.height)
         guard longest > maxDimension else { return self }
         let scale = maxDimension / longest
         let target = CGSize(width: size.width * scale, height: size.height * scale)
-        return UIGraphicsImageRenderer(size: target).image { _ in
+        // Render at 1x so `maxDimension` is in pixels, not points.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: target, format: format).image { _ in
             draw(in: CGRect(origin: .zero, size: target))
         }
     }

@@ -165,3 +165,93 @@ struct TabHeader<Title: View>: View {
         .frame(height: 56)
     }
 }
+
+/// Big horizontal wheel for picking a number: swipe sideways (or tap a number) to choose.
+/// Used instead of thin sliders when "Easy time picking" is on in Settings.
+struct HorizontalWheelPicker: View {
+    let values: [Int]
+    @Binding var selection: Int
+    let accessibilityName: String
+    var label: (Int) -> String = { "\($0)" }
+    /// Called when the wheel comes to rest after being moved.
+    var onSettled: (() -> Void)?
+
+    @State private var scrolledID: Int?
+    private let itemWidth: CGFloat = 84
+    private let height: CGFloat = 76
+
+    init(values: [Int], selection: Binding<Int>, accessibilityName: String,
+         label: @escaping (Int) -> String = { "\($0)" }, onSettled: (() -> Void)? = nil) {
+        self.values = values
+        _selection = selection
+        self.accessibilityName = accessibilityName
+        self.label = label
+        self.onSettled = onSettled
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach(values, id: \.self) { value in
+                        Text(label(value))
+                            .font(.wakie(30, .black))
+                            .monospacedDigit()
+                            .foregroundStyle(Theme.ink)
+                            .frame(width: itemWidth, height: height)
+                            .contentShape(Rectangle())
+                            .scrollTransition(axis: .horizontal) { content, phase in
+                                content
+                                    .opacity(phase.isIdentity ? 1 : 0.35)
+                                    .scaleEffect(phase.isIdentity ? 1 : 0.72)
+                            }
+                            .onTapGesture { withAnimation(.snappy) { scrolledID = value } }
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.viewAligned)
+            .scrollPosition(id: $scrolledID, anchor: .center)
+            .contentMargins(.horizontal, max(0, (geo.size.width - itemWidth) / 2), for: .scrollContent)
+            .onScrollPhaseChange { _, phase in
+                if phase == .idle { onSettled?() }
+            }
+        }
+        .frame(height: height)
+        .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Theme.inset))
+        // Highlight around the chosen number, like a selection window.
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Theme.purple, lineWidth: 3)
+                .frame(width: itemWidth, height: height - 10)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .leading) { edgeHint(systemName: "chevron.left") }
+        .overlay(alignment: .trailing) { edgeHint(systemName: "chevron.right") }
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        // Position once laid out, so the chosen value starts centred.
+        .onAppear { if scrolledID == nil { scrolledID = selection } }
+        .onChange(of: scrolledID) { _, newValue in
+            if let newValue { selection = newValue }
+        }
+        .onChange(of: selection) { _, newValue in
+            if scrolledID != newValue { withAnimation(.snappy) { scrolledID = newValue } }
+        }
+        .sensoryFeedback(.selection, trigger: selection)
+        .accessibilityRepresentation {
+            Picker(accessibilityName, selection: $selection) {
+                ForEach(values, id: \.self) { Text(label($0)).tag($0) }
+            }
+        }
+    }
+
+    /// Small arrows at the ends showing the wheel moves sideways.
+    private func edgeHint(systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 14, weight: .black))
+            .foregroundStyle(Theme.inkSecondary.opacity(0.6))
+            .padding(.horizontal, 8)
+            .allowsHitTesting(false)
+    }
+}

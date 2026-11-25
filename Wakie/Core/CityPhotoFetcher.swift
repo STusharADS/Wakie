@@ -33,8 +33,9 @@ nonisolated enum CityPhotoFetcher {
         for title in titles {
             guard let summary = await summary(for: title), summary.type != "disambiguation",
                   let thumbnail = summary.thumbnail?.source else { continue }
-            // Ask for a sharper thumbnail than the default 320 px, falling back if that size isn't offered.
-            let candidates = [thumbnail.replacingOccurrences(of: "/320px-", with: "/800px-"), thumbnail]
+            // Ask for a sharper thumbnail than the default (~330 px), falling back if that size isn't offered.
+            let sharper = thumbnail.replacingOccurrences(of: #"/\d+px-"#, with: "/960px-", options: .regularExpression)
+            let candidates = [sharper, thumbnail]
             for candidate in candidates {
                 guard let url = URL(string: candidate), let data = await download(url) else { continue }
                 return data

@@ -4,5 +4,9 @@
 <dict>
 	<key>NSAlarmKitUsageDescription</key>
 	<string>Wakie schedules alarms that ring until you finish your wake-up mission.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 </dict>
 </plist>

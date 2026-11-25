@@ -32,6 +32,7 @@ struct ContentView: View {
             }
         }
         .tint(Theme.yellowDeep)
+        .sensoryFeedback(.selection, trigger: selection)
         .fullScreenCover(item: $model.session) { session in
             RingingView(session: session)
         }

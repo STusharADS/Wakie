@@ -49,8 +49,12 @@ nonisolated enum ToneLibrary {
     private static let version = 1
     private static let versionKey = "toneLibraryVersion"
 
-    /// Writes any missing built-in sounds. Cheap when they already exist.
+    private static let lock = NSLock()
+
+    /// Writes any missing built-in sounds. Cheap when they already exist; safe to call from anywhere.
     static func ensureGenerated() {
+        lock.lock()
+        defer { lock.unlock() }
         let defaults = UserDefaults.standard
         let regenerate = defaults.integer(forKey: versionKey) != version
         for tone in alarmTones {
@@ -268,7 +272,7 @@ nonisolated enum ToneLibrary {
         init(seed: UInt64) { state = seed &* 6_364_136_223_846_793_005 &+ 1 }
         mutating func next() -> Double {
             state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
-            return Double(Int64(bitPattern: state >> 11 << 11)) / Double(Int64.max)
+            return Double(Int64(bitPattern: state)) / Double(Int64.max)
         }
     }
 
@@ -286,7 +290,7 @@ nonisolated enum ToneLibrary {
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)),
               let channel = buffer.floatChannelData?[0] else { throw CocoaError(.fileWriteUnknown) }
         buffer.frameLength = AVAudioFrameCount(samples.count)
-        samples.withUnsafeBufferPointer { channel.update(from: $0.baseAddress!, count: samples.count) }
+        for (index, sample) in samples.enumerated() { channel[index] = sample }
         try? FileManager.default.removeItem(at: url)
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,

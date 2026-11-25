@@ -80,10 +80,13 @@ struct NextAlarmProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<NextAlarmEntry>) -> Void) {
         let now = Date.now
         let upcoming = SharedStore.upcoming(after: now)
-        // One entry now, then one the moment each alarm rings so the widget moves on to the next one.
-        var entries = [NextAlarmEntry(date: now, next: upcoming.first)]
-        for (index, ring) in upcoming.prefix(10).enumerated() {
-            entries.append(NextAlarmEntry(date: ring.fireDate.addingTimeInterval(1), next: upcoming.dropFirst(index + 1).first))
+        // An entry now, one just after each alarm rings (so the widget moves on to the next one),
+        // and one every 15 minutes for a few hours so the starry background twinkles.
+        var dates = [now]
+        dates += upcoming.prefix(10).map { $0.fireDate.addingTimeInterval(1) }
+        dates += (1...16).map { now.addingTimeInterval(Double($0) * 15 * 60) }
+        let entries = dates.sorted().map { date in
+            NextAlarmEntry(date: date, next: upcoming.first { $0.fireDate > date })
         }
         // Ask again in a day at the latest, so repeating alarms keep rolling forward.
         completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(24 * 3600))))
@@ -93,8 +96,86 @@ struct NextAlarmProvider: TimelineProvider {
 // MARK: - Views
 
 private let ink = Color(red: 0.12, green: 0.10, blue: 0.24)
-private let purpleTop = Color(red: 0.23, green: 0.16, blue: 0.53)
-private let purpleBottom = Color(red: 0.43, green: 0.31, blue: 0.78)
+/// The app's night sky colour (#001120), deepened toward black at the bottom for contrast.
+private let nightSky = Color(red: 0, green: 17 / 255, blue: 32 / 255)
+private let nightSkyDeep = Color(red: 0, green: 6 / 255, blue: 14 / 255)
+private let wakieYellow = Color(red: 1.0, green: 0.83, blue: 0.23)
+private let wakieLavender = Color(red: 0.78, green: 0.70, blue: 1.0)
+private let wakiePurple = Color(red: 0.55, green: 0.42, blue: 0.96)
+
+/// The app's dark background: night sky, stars and soft hills along the bottom.
+/// Widgets can't animate continuously, so the stars' brightness shifts with each
+/// timeline entry to give a gentle twinkle over the day.
+struct WidgetNightBackground: View {
+    let date: Date
+
+    private struct Star {
+        let x, y, radius, brightness, phase: Double
+        let isSparkle: Bool
+    }
+
+    private static let stars: [Star] = {
+        var seed: UInt64 = 0x5EED_CAFE
+        func next() -> Double {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Double(seed >> 33) / Double(1 << 31)
+        }
+        return (0..<46).map { index in
+            let sparkle = index % 8 == 0
+            return Star(x: next(), y: pow(next(), 1.3) * 0.8,
+                        radius: sparkle ? 3 + next() * 2.5 : 0.6 + next() * 1.4,
+                        brightness: 0.65 + next() * 0.35, phase: next() * .pi * 2, isSparkle: sparkle)
+        }
+    }()
+
+    var body: some View {
+        let t = date.timeIntervalSinceReferenceDate / 600
+        ZStack {
+            LinearGradient(colors: [nightSky, nightSkyDeep], startPoint: .top, endPoint: .bottom)
+            Canvas { canvas, size in
+                for star in Self.stars {
+                    let twinkle = 0.6 + 0.4 * sin(t + star.phase)
+                    let c = CGPoint(x: star.x * size.width, y: star.y * size.height)
+                    let r = star.radius
+                    let path = star.isSparkle
+                        ? Self.sparkle(center: c, radius: r)
+                        : Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+                    canvas.fill(path, with: .color(.white.opacity(star.brightness * twinkle)))
+                }
+            }
+            GeometryReader { geo in
+                let w = geo.size.width, h = geo.size.height
+                ZStack {
+                    Ellipse()
+                        .fill(LinearGradient(colors: [wakieLavender.opacity(0.7), wakiePurple.opacity(0.5)], startPoint: .top, endPoint: .bottom))
+                        .frame(width: w * 0.9, height: h * 0.45)
+                        .position(x: w * 0.08, y: h * 1.02)
+                    Ellipse()
+                        .fill(LinearGradient(colors: [wakieYellow.opacity(0.55), wakieYellow.opacity(0.2)], startPoint: .top, endPoint: .bottom))
+                        .frame(width: w * 0.75, height: h * 0.35)
+                        .position(x: w * 0.6, y: h * 1.06)
+                    Ellipse()
+                        .fill(LinearGradient(colors: [wakieLavender.opacity(0.7), wakiePurple.opacity(0.5)], startPoint: .top, endPoint: .bottom))
+                        .frame(width: w * 0.7, height: h * 0.45)
+                        .position(x: w * 1.0, y: h * 1.0)
+                }
+                .blur(radius: 6)
+            }
+        }
+    }
+
+    private static func sparkle(center c: CGPoint, radius r: Double) -> Path {
+        var p = Path()
+        let inner = r * 0.28
+        p.move(to: CGPoint(x: c.x, y: c.y - r))
+        p.addQuadCurve(to: CGPoint(x: c.x + r, y: c.y), control: CGPoint(x: c.x + inner, y: c.y - inner))
+        p.addQuadCurve(to: CGPoint(x: c.x, y: c.y + r), control: CGPoint(x: c.x + inner, y: c.y + inner))
+        p.addQuadCurve(to: CGPoint(x: c.x - r, y: c.y), control: CGPoint(x: c.x - inner, y: c.y + inner))
+        p.addQuadCurve(to: CGPoint(x: c.x, y: c.y - r), control: CGPoint(x: c.x - inner, y: c.y - inner))
+        p.closeSubpath()
+        return p
+    }
+}
 
 struct WakieWidgetEntryView: View {
     let entry: NextAlarmEntry
@@ -116,22 +197,20 @@ struct WakieWidgetEntryView: View {
         VStack(alignment: .leading, spacing: 4) {
             if let next = entry.next {
                 HStack(alignment: .top) {
-                    Image(next.mascot)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 52, height: 52)
+                    mascot(next.mascot, size: 72)
                     Spacer(minLength: 0)
-                    Image(systemName: "alarm.fill")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.8))
+                    Label("Wakie", systemImage: "alarm.fill")
+                        .font(.system(size: 11, weight: .heavy, design: .rounded))
+                        .foregroundStyle(wakieYellow)
                 }
                 Spacer(minLength: 0)
                 timeLabel(next, size: 34)
                 Text(next.fireDate, style: .relative)
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.8))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(wakieYellow)
                     .lineLimit(1)
                 missionChip(next)
+                    .padding(.top, 2)
             } else {
                 emptyState
             }
@@ -142,20 +221,17 @@ struct WakieWidgetEntryView: View {
     private var medium: some View {
         HStack(spacing: 14) {
             if let next = entry.next {
-                Image(next.mascot)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 100, height: 100)
+                mascot(next.mascot, size: 124)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Next alarm")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.75))
+                    Label("Next alarm", systemImage: "alarm.fill")
+                        .font(.system(size: 12, weight: .heavy, design: .rounded))
+                        .foregroundStyle(wakieYellow)
                     timeLabel(next, size: 40)
                     HStack(spacing: 4) {
                         Text("Rings in")
                         Text(next.fireDate, style: .relative)
                     }
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.85))
                     .lineLimit(1)
                     HStack(spacing: 6) {
@@ -168,10 +244,7 @@ struct WakieWidgetEntryView: View {
                 }
                 Spacer(minLength: 0)
             } else {
-                Image("ShakyShaky")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 90, height: 90)
+                mascot("ShakyShaky", size: 100)
                 emptyState
                 Spacer(minLength: 0)
             }
@@ -188,6 +261,15 @@ struct WakieWidgetEntryView: View {
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.8))
         }
+    }
+
+    /// The mascot artwork has wide transparent margins, so it's enlarged to fill its frame.
+    private func mascot(_ name: String, size: CGFloat) -> some View {
+        Image(name)
+            .resizable()
+            .scaledToFit()
+            .scaleEffect(1.7)
+            .frame(width: size, height: size)
     }
 
     private func timeLabel(_ next: WidgetAlarmOccurrence, size: CGFloat) -> some View {
@@ -272,7 +354,7 @@ struct WakieWidget: Widget {
         StaticConfiguration(kind: kind, provider: NextAlarmProvider()) { entry in
             WakieWidgetEntryView(entry: entry)
                 .containerBackground(for: .widget) {
-                    LinearGradient(colors: [purpleTop, purpleBottom], startPoint: .top, endPoint: .bottom)
+                    WidgetNightBackground(date: entry.date)
                 }
         }
         .configurationDisplayName("Next Alarm")

@@ -14,10 +14,14 @@ struct RingingView: View {
     @Environment(AppModel.self) private var model
     @State private var missionStarted = false
     @State private var appeared = false
-    @State private var canDismiss = false
+    /// Plays the alarm tone on a loop from inside the app, so it keeps sounding even if the
+    /// system alert was stopped or the screen is locked with the power button.
+    @State private var ringer = AudioPreviewPlayer()
 
-    /// How long the alarm rings before the Dismiss button appears.
-    private let dismissDelay: TimeInterval = 10
+    private var alarmSoundURL: URL {
+        let file = model.alarms.first { $0.id == session.alarmID }?.soundFile ?? ToneLibrary.defaultAlarmFile
+        return AudioImporter.alarmSoundsDirectory.appending(path: file)
+    }
 
     var body: some View {
         Group {
@@ -34,18 +38,19 @@ struct RingingView: View {
         .animation(.spring(duration: 0.5), value: missionStarted)
         .interactiveDismissDisabled()
         .task(id: missionStarted) {
-            // Buzz until the mission starts, in case the system alarm was already silenced.
+            guard !missionStarted else {
+                ringer.stop()
+                return
+            }
+            // Ring and buzz until the mission starts. Background audio keeps this going
+            // when the phone is locked, so the power button can't silence the alarm.
+            ringer.play(alarmSoundURL, loops: true)
             while !missionStarted && !Task.isCancelled {
                 AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
                 try? await Task.sleep(for: .seconds(1.6))
             }
         }
-        .task {
-            // Offer a way out once the alarm has been ringing for a little while.
-            let remaining = dismissDelay - Date.now.timeIntervalSince(session.startedAt)
-            if remaining > 0 { try? await Task.sleep(for: .seconds(remaining)) }
-            withAnimation(.spring(duration: 0.6)) { canDismiss = true }
-        }
+        .onDisappear { ringer.stop() }
     }
 
     private var ringing: some View {
@@ -62,6 +67,7 @@ struct RingingView: View {
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
                     .lineSpacing(-6)
+                    .fixedSize(horizontal: false, vertical: true)
                     .rotationEffect(.degrees(-3))
                     .shadow(color: Theme.yellow.opacity(0.35), radius: 14)
                     .offset(y: appeared ? 0 : 30)
@@ -78,7 +84,6 @@ struct RingingView: View {
                     model.missionDidStart()
                     missionStarted = true
                 }
-                .padding(.horizontal, 28)
                 bottomActions
                     .frame(height: 50)
                     .padding(.top, 10)
@@ -122,22 +127,6 @@ struct RingingView: View {
                     // Darker tint keeps the white label readable over the yellow glow.
                     .glassEffect(.regular.tint(Theme.ringTop.opacity(0.55)).interactive(), in: .capsule)
                     .accessibilityHint("You can only snooze once")
-                }
-                if canDismiss {
-                    Button {
-                        model.dismissSession()
-                    } label: {
-                        Label("Dismiss", systemImage: "xmark")
-                            .font(.wakie(15, .bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 18)
-                            .frame(height: 46)
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular.tint(Theme.danger.opacity(0.55)).interactive(), in: .capsule)
-                    .accessibilityHint("Turns the alarm off without doing the mission")
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
             }
         }
@@ -328,66 +317,46 @@ private struct LiveWave: View {
 
 // MARK: - Swipe up
 
-/// White pill with a yellow arrow knob. Drag it up to start the mission.
+/// A vertical track with a yellow knob at the bottom. Drag the knob up the track to
+/// start the mission; chevrons inside the track light up to show the direction.
 struct SwipeUpControl: View {
     let onTrigger: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var drag: CGFloat = 0
     @State private var triggered = false
-    private let threshold: CGFloat = 110
+    /// 0...5, for a haptic tick at each step on the way up.
+    @State private var step = 0
+
+    private let knobSize: CGFloat = 64
+    private let trackWidth: CGFloat = 80
+    private let trackHeight: CGFloat = 168
+    /// How far the knob travels before it reaches the top of the track.
+    private var travel: CGFloat { trackHeight - knobSize - 16 }
+
+    private var progress: CGFloat { min(1, max(0, -drag / travel)) }
 
     var body: some View {
-        let progress = min(1, max(0, -drag / threshold))
-        VStack(spacing: 10) {
-            chevrons
-                .opacity(1 - progress)
-            HStack(spacing: 14) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 26, weight: .black))
-                    .foregroundStyle(Color(hex: 0x1E1A3C))
-                    .frame(width: 66, height: 66)
-                    .background(Circle().fill(Theme.yellow))
-                    .scaleEffect(1 + progress * 0.15)
-                Text("Swipe up to\nstart mission")
-                    .font(.wakie(18, .heavy))
-                    .foregroundStyle(Color(hex: 0x1E1A3C))
-                    .multilineTextAlignment(.leading)
-                Spacer(minLength: 0)
+        VStack(spacing: 12) {
+            ZStack(alignment: .bottom) {
+                track
+                fill
+                chevrons
+                    .frame(height: trackHeight - knobSize - 8, alignment: .top)
+                    .padding(.bottom, knobSize + 8)
+                    .opacity(1 - progress)
+                knob
             }
-            .padding(6)
-            .padding(.trailing, 16)
-            .background(
-                Capsule()
-                    .fill(.white)
-                    .shadow(color: Theme.yellow.opacity(0.25 + progress * 0.5), radius: 12 + progress * 18)
-            )
-            .offset(y: drag)
-            .phaseAnimator([0, -8, 0], trigger: reduceMotion ? 0 : 1) { content, hop in
-                // Gentle idle hop hinting at the swipe direction (only while untouched).
-                content.offset(y: drag == 0 ? hop : 0)
-            } animation: { _ in .easeInOut(duration: 0.6).delay(0.8) }
+            .frame(width: trackWidth, height: trackHeight)
+            .contentShape(Capsule())
+            .gesture(dragGesture)
+
+            Text("Swipe up to start mission")
+                .font(.wakie(17, .heavy))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
         }
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 4)
-                .onChanged { value in
-                    // Upward only; pulling down just resists.
-                    let dy = value.translation.height
-                    drag = dy < 0 ? dy : dy * 0.15
-                }
-                .onEnded { value in
-                    let flicked = value.predictedEndTranslation.height < -threshold * 1.6
-                    if -value.translation.height > threshold || flicked {
-                        triggered = true
-                        withAnimation(.easeOut(duration: 0.25)) { drag = -420 }
-                        onTrigger()
-                    } else {
-                        withAnimation(.spring(response: 0.45, dampingFraction: 0.6)) { drag = 0 }
-                    }
-                }
-        )
-        .sensoryFeedback(.impact(weight: .heavy), trigger: triggered)
-        .sensoryFeedback(.selection, trigger: progress >= 1)
+        .sensoryFeedback(.impact(weight: .heavy), trigger: triggered) { _, done in done }
+        .sensoryFeedback(trigger: step, tick)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Start mission")
         .accessibilityHint("Swipe up, or double tap, to begin")
@@ -395,18 +364,90 @@ struct SwipeUpControl: View {
         .accessibilityAction { onTrigger() }
     }
 
-    /// Three chevrons lighting up bottom-to-top, pointing the way.
+    /// A tick for each step up the track, growing stronger as the knob climbs.
+    private func tick(from old: Int, to new: Int) -> SensoryFeedback? {
+        guard new > old else { return nil }
+        let intensity: Double = 0.4 + Double(new) * 0.12
+        return .impact(weight: .light, intensity: intensity)
+    }
+
+    private var track: some View {
+        let glow: Double = 0.2 + Double(progress) * 0.5
+        return Capsule()
+            .fill(.white.opacity(0.16 + Double(progress) * 0.14))
+            .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 1.5))
+            .frame(width: trackWidth, height: trackHeight)
+            .shadow(color: Theme.yellow.opacity(glow), radius: 10 + progress * 20)
+    }
+
+    /// Yellow fill that rises with the knob, so it's clear the swipe is working.
+    private var fill: some View {
+        let gradient = LinearGradient(colors: [Theme.yellow.opacity(0.85), Theme.yellow.opacity(0.25)],
+                                      startPoint: .bottom, endPoint: .top)
+        let height: CGFloat = knobSize + 6 + progress * travel
+        return Capsule()
+            .fill(gradient)
+            .frame(width: trackWidth - 10, height: height)
+            .padding(.bottom, 5)
+            .opacity(drag == 0 ? 0 : 1)
+    }
+
+    private var knob: some View {
+        let scale: CGFloat = triggered ? 1.35 : 1 + progress * 0.12
+        return Image(systemName: "arrow.up")
+            .font(.system(size: 28, weight: .black))
+            .foregroundStyle(Color(hex: 0x1E1A3C))
+            .frame(width: knobSize, height: knobSize)
+            .background(Circle().fill(Theme.yellow).shadow(color: .black.opacity(0.2), radius: 6, y: 3))
+            .scaleEffect(scale)
+            .padding(.bottom, 8)
+            .offset(y: drag)
+            .phaseAnimator([0, -10, 0], trigger: reduceMotion ? 0 : 1) { content, hop in
+                // Gentle idle hop up the track (only while untouched).
+                content.offset(y: drag == 0 ? hop : 0)
+            } animation: { _ in .easeInOut(duration: 0.6).delay(0.8) }
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 4)
+            .onChanged { value in
+                // Upward only, stopping at the top; pulling down just resists.
+                let dy = value.translation.height
+                drag = dy < 0 ? max(dy, -travel) : dy * 0.15
+                step = Int(progress * 5)
+            }
+            .onEnded { value in
+                let flicked = value.predictedEndTranslation.height < -travel * 1.4
+                if -value.translation.height > travel * 0.8 || flicked {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) {
+                        drag = -travel
+                        triggered = true
+                    }
+                    // Let the knob pop at the top before the mission slides in.
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(220))
+                        onTrigger()
+                    }
+                } else {
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.6)) { drag = 0 }
+                    step = 0
+                }
+            }
+    }
+
+    /// Three chevrons lighting up bottom-to-top inside the track, pointing the way.
     private var chevrons: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
-            VStack(spacing: -6) {
+            VStack(spacing: -4) {
                 ForEach(0..<3, id: \.self) { i in
                     let phase = (t * 1.4 - Double(2 - i) * 0.25).truncatingRemainder(dividingBy: 1)
                     Image(systemName: "chevron.up")
-                        .font(.system(size: 20, weight: .black))
+                        .font(.system(size: 22, weight: .black))
                         .foregroundStyle(.white.opacity(0.25 + 0.75 * max(0, sin(phase * .pi))))
                 }
             }
+            .padding(.top, 14)
         }
         .accessibilityHidden(true)
     }

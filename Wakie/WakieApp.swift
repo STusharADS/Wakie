@@ -5,6 +5,7 @@
 //  Created by Tushar Shaw on 16/11/2026.
 //
 
+import AppIntents
 import SwiftUI
 
 @main
@@ -15,8 +16,11 @@ struct WakieApp: App {
         WindowGroup {
             ContentView()
                 .environment(model)
-                .preferredColorScheme(model.isNight ? .dark : .light)
-                .task { model.start() }
+                .task {
+                    model.start()
+                    // Refresh the alarms and World Clock cities Siri phrases can mention.
+                    WakieShortcuts.updateAppShortcutParameters()
+                }
         }
     }
 }

@@ -162,7 +162,10 @@ nonisolated struct WakieAlarm: Codable, Identifiable, Hashable, Sendable {
 
     var subtitle: String { "\(repeatText) · \(mission.title)" }
 
-    var soundTitle: String { soundFile.map(AudioImporter.title(forFile:)) ?? "Default" }
+    var soundTitle: String {
+        guard let soundFile else { return "Wakie Rise" }
+        return ToneLibrary.title(forFile: soundFile) ?? AudioImporter.title(forFile: soundFile)
+    }
 
     var timeZone: TimeZone {
         timeZoneID.flatMap(TimeZone.init(identifier:)) ?? .current
@@ -374,11 +377,15 @@ nonisolated struct WorldCity: Codable, Identifiable, Hashable, Sendable {
         return scalars.count == 2 ? String(String.UnicodeScalarView(scalars)) : "🌍"
     }
 
+    /// Starting cities. Jammu and Colombo get their photos fetched online on first launch.
     static let defaults: [WorldCity] = [
         WorldCity(id: "Europe/Rome", name: "Naples", country: "Italy", flag: "🇮🇹", timeZoneID: "Europe/Rome", banner: "BannerNaples"),
-        WorldCity(id: "Asia/Kolkata", name: "Chennai", country: "India", flag: "🇮🇳", timeZoneID: "Asia/Kolkata", banner: "BannerChennai"),
-        WorldCity(id: "Europe/Riga", name: "Riga", country: "Latvia", flag: "🇱🇻", timeZoneID: "Europe/Riga", banner: "BannerRiga"),
+        WorldCity(id: "Asia/Kolkata", name: "Jammu", country: "India", flag: "🇮🇳", timeZoneID: "Asia/Kolkata"),
+        WorldCity(id: "Asia/Colombo", name: "Colombo", country: "Sri Lanka", flag: "🇱🇰", timeZoneID: "Asia/Colombo"),
     ]
+
+    /// The starting list from earlier versions, replaced by `defaults` if left untouched.
+    static let previousDefaultNames = ["Naples", "Chennai", "Riga"]
 }
 
 /// The phone's own location. Uses the World Clock city in the phone's time zone when

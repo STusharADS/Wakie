@@ -8,6 +8,7 @@
 import Foundation
 import Observation
 import AVFoundation
+import UIKit
 
 @Observable
 final class AppModel {
@@ -15,15 +16,24 @@ final class AppModel {
 
     // MARK: Persisted state
 
-    var alarms: [WakieAlarm] { didSet { store(alarms, for: Keys.alarms) } }
+    var alarms: [WakieAlarm] {
+        didSet {
+            store(alarms, for: Keys.alarms)
+            WidgetBridge.publish(alarms)
+        }
+    }
     var stats: WakeStats { didSet { store(stats, for: Keys.stats) } }
     var cities: [WorldCity] { didSet { store(cities, for: Keys.cities) } }
     var pickItems: [PickItem] { didSet { store(pickItems, for: Keys.pickItems) } }
     var danceSeconds: Int { didSet { defaults.set(danceSeconds, forKey: Keys.danceSeconds) } }
     var talkSeconds: Int { didSet { defaults.set(talkSeconds, forKey: Keys.talkSeconds) } }
-    var isNight: Bool { didSet { defaults.set(isNight, forKey: Keys.isNight) } }
+    /// Big horizontal wheels instead of sliders, for people who find small controls hard
+    /// (for example, people living with Alzheimer's or other memory conditions).
+    var easyTimePicking: Bool { didSet { defaults.set(easyTimePicking, forKey: Keys.easyTimePicking) } }
     /// Song played while dancing in Shaky-Shaky, stored in `AudioImporter.danceMusicDirectory`.
     var danceSongFile: String? { didSet { defaults.set(danceSongFile, forKey: Keys.danceSongFile) } }
+    /// An Apple Music song to dance to instead of a file. Only one of the two is set.
+    var danceAppleMusicSong: AppleMusicSong? { didSet { store(danceAppleMusicSong, for: Keys.danceAppleMusicSong) } }
 
     /// The alarm currently waiting for its mission. Drives the full-screen ringing view.
     var session: WakeSession? { didSet { store(session, for: Keys.session) } }
@@ -51,16 +61,21 @@ final class AppModel {
         static let pickItems = "pickItems"
         static let danceSeconds = "danceSeconds"
         static let talkSeconds = "talkSeconds"
-        static let isNight = "isNight"
+        static let easyTimePicking = "easyTimePicking"
         static let session = "session"
         static let followUps = "followUps"
         static let danceSongFile = "danceSongFile"
+        static let danceAppleMusicSong = "danceAppleMusicSong"
     }
 
     private init() {
         let d = UserDefaults.standard
         // Alarms keep their own copy of the place's flag; repair missing ones using the city's country.
-        let savedCities = Self.load([WorldCity].self, from: d, key: Keys.cities) ?? WorldCity.defaults
+        var savedCities = Self.load([WorldCity].self, from: d, key: Keys.cities) ?? WorldCity.defaults
+        // Someone who never changed the old starting cities gets the new ones.
+        if savedCities.map(\.name) == WorldCity.previousDefaultNames && savedCities.allSatisfy({ $0.photoFile == nil }) {
+            savedCities = WorldCity.defaults
+        }
         alarms = (Self.load([WakieAlarm].self, from: d, key: Keys.alarms) ?? []).map { alarm in
             guard alarm.placeFlag == "🌍", let name = alarm.placeName,
                   let city = savedCities.first(where: { $0.name == name && $0.timeZoneID == alarm.timeZoneID }) else { return alarm }
@@ -79,10 +94,11 @@ final class AppModel {
             return fixed
         }
         pickItems = Self.load([PickItem].self, from: d, key: Keys.pickItems) ?? PickItem.defaults
-        danceSeconds = min(max(d.object(forKey: Keys.danceSeconds) as? Int ?? 20, Self.missionSecondsRange.lowerBound), Self.missionSecondsRange.upperBound)
-        talkSeconds = min(max(d.object(forKey: Keys.talkSeconds) as? Int ?? 30, Self.missionSecondsRange.lowerBound), Self.missionSecondsRange.upperBound)
-        isNight = d.bool(forKey: Keys.isNight)
+        danceSeconds = min(max(d.object(forKey: Keys.danceSeconds) as? Int ?? 5, Self.missionSecondsRange.lowerBound), Self.missionSecondsRange.upperBound)
+        talkSeconds = min(max(d.object(forKey: Keys.talkSeconds) as? Int ?? 5, Self.missionSecondsRange.lowerBound), Self.missionSecondsRange.upperBound)
+        easyTimePicking = d.bool(forKey: Keys.easyTimePicking)
         danceSongFile = d.string(forKey: Keys.danceSongFile)
+        danceAppleMusicSong = Self.load(AppleMusicSong.self, from: d, key: Keys.danceAppleMusicSong)
         session = Self.load(WakeSession.self, from: d, key: Keys.session)
         followUps = Self.load([UUID: UUID].self, from: d, key: Keys.followUps) ?? [:]
         refreshRecordings()
@@ -110,6 +126,14 @@ final class AppModel {
     func start() {
         guard observationTask == nil else { return }
         disableExpiredOneShots()
+        fetchMissingCityPhotos()
+        // Make sure Wakie's own sounds exist (the default alarm tone included).
+        Task {
+            await Task.detached(priority: .userInitiated) { ToneLibrary.ensureGenerated() }.value
+            refreshAlarmSounds()
+        }
+        // Refresh the widget's upcoming rings (repeating alarms roll forward over time).
+        WidgetBridge.publish(alarms)
         Task { await syncWithSystem() }
         observationTask = Task { [weak self] in
             for await ringing in AlarmScheduler.alertingUpdates() {
@@ -131,14 +155,22 @@ final class AppModel {
     /// Makes sure every enabled alarm is registered with AlarmKit and nothing else is.
     private func syncWithSystem() async {
         let scheduled = AlarmScheduler.scheduledIDs()
-        let enabledIDs = Set(alarms.filter(\.isEnabled).map(\.id))
+        let enabled = alarms.filter(\.isEnabled)
+        // Each enabled alarm owns its own ID plus the IDs of its extra rings.
+        let knownIDs = Set(enabled.flatMap { [$0.id] + AlarmScheduler.chainIDs(for: $0.id) })
         let followUpIDs = Set(followUps.keys)
-        for id in scheduled where !enabledIDs.contains(id) && !followUpIDs.contains(id) {
+        for id in scheduled where !knownIDs.contains(id) && !followUpIDs.contains(id) {
             AlarmScheduler.cancel(id)
         }
         // Drop follow-up bookkeeping for alarms the system no longer knows about.
         followUps = followUps.filter { scheduled.contains($0.key) }
-        let missing = alarms.filter { $0.isEnabled && !scheduled.contains($0.id) }
+        // Re-schedule alarms that are missing, or whose extra rings belong to a past occurrence.
+        let missing = enabled.filter { alarm in
+            guard scheduled.contains(alarm.id) else { return true }
+            guard let first = AlarmScheduler.chainIDs(for: alarm.id).first,
+                  let next = alarm.nextFireDate(), next > .now.addingTimeInterval(5) else { return false }
+            return !scheduled.contains(first)
+        }
         guard !missing.isEmpty, await AlarmScheduler.requestAuthorization() else { return }
         for alarm in missing {
             try? await AlarmScheduler.schedule(alarm)
@@ -219,8 +251,8 @@ final class AppModel {
     // MARK: - Ringing flow
 
     private func sourceAlarm(forSystemID id: UUID) -> WakieAlarm? {
-        let sourceID = followUps[id] ?? id
-        return alarms.first { $0.id == sourceID }
+        if let sourceID = followUps[id] { return alarms.first { $0.id == sourceID } }
+        return alarms.first { $0.id == id || AlarmScheduler.chainIDs(for: $0.id).contains(id) }
     }
 
     /// The app saw a Wakie alarm start ringing while it was running.
@@ -228,7 +260,7 @@ final class AppModel {
         guard session == nil else { return }
         for id in ringingIDs {
             guard let alarm = sourceAlarm(forSystemID: id) else { continue }
-            let isFollowUp = followUps[id] != nil
+            let isFollowUp = id != alarm.id
             session = WakeSession(
                 alarmID: alarm.id,
                 mission: alarm.mission,
@@ -266,6 +298,8 @@ final class AppModel {
         // Follow-up alarms never offer snooze, so a snooze request for one is ignored.
         guard followUps[kitAlarmID] == nil else { return }
         AlarmScheduler.stopIfAlerting(kitAlarmID)
+        // The snooze replaces the extra rings for this occurrence.
+        AlarmScheduler.cancelChain(alarm.id)
         if let backup = session?.backupAlarmID {
             AlarmScheduler.cancel(backup)
             followUps[backup] = nil
@@ -294,6 +328,8 @@ final class AppModel {
     func missionDidStart() {
         guard let session else { return }
         AlarmScheduler.stopIfAlerting(session.alarmID)
+        // The challenge is underway, so the extra rings aren't needed (the backup alarm covers giving up).
+        AlarmScheduler.cancelChain(session.alarmID)
         for (kitID, source) in followUps where source == session.alarmID && kitID != session.backupAlarmID {
             AlarmScheduler.stopIfAlerting(kitID)
         }
@@ -337,12 +373,6 @@ final class AppModel {
         stats.totalSecondsToWake += Date.now.timeIntervalSince(session.startedAt)
     }
 
-    /// Turns the alarm off without doing the mission. Doesn't count as a wake-up.
-    func dismissSession() {
-        guard let session else { return }
-        endSession(session)
-    }
-
     /// Silences the ringing alarm, cancels its snooze/backup follow-ups and closes the session.
     private func endSession(_ session: WakeSession) {
         AlarmScheduler.stopIfAlerting(session.alarmID)
@@ -350,8 +380,15 @@ final class AppModel {
             AlarmScheduler.cancel(kitID)
             followUps[kitID] = nil
         }
-        if let index = alarms.firstIndex(where: { $0.id == session.alarmID }), !alarms[index].isRepeating {
-            alarms[index].isEnabled = false
+        AlarmScheduler.cancelChain(session.alarmID)
+        if let index = alarms.firstIndex(where: { $0.id == session.alarmID }) {
+            if alarms[index].isRepeating {
+                // Set up the extra rings for the next occurrence.
+                let alarm = alarms[index]
+                if alarm.isEnabled { Task { await register(alarm) } }
+            } else {
+                alarms[index].isEnabled = false
+            }
         }
         self.session = nil
     }
@@ -421,7 +458,10 @@ final class AppModel {
     func refreshAlarmSounds() {
         let urls = (try? FileManager.default.contentsOfDirectory(
             at: AudioImporter.alarmSoundsDirectory, includingPropertiesForKeys: nil)) ?? []
-        alarmSounds = urls.map(\.lastPathComponent).filter { $0.hasSuffix(".caf") }.sorted()
+        // Built-in tones are listed separately, so only imported songs show here.
+        alarmSounds = urls.map(\.lastPathComponent)
+            .filter { $0.hasSuffix(".caf") && !ToneLibrary.isBuiltIn($0) }
+            .sorted()
     }
 
     /// Converts a song from Files into an alarm sound. Returns its file name.
@@ -460,15 +500,69 @@ final class AppModel {
         danceSongFile = file
     }
 
+    /// Picks a song from the person's Apple Music subscription.
+    func selectAppleMusicDanceSong(_ song: AppleMusicSong) {
+        removeDanceSong()
+        danceAppleMusicSong = song
+    }
+
     func removeDanceSong() {
-        if let old = danceSongURL { try? FileManager.default.removeItem(at: old) }
+        danceAppleMusicSong = nil
+        // Built-in tracks are shared, so only imported songs are deleted from disk.
+        if let old = danceSongURL, let file = danceSongFile, !ToneLibrary.isBuiltIn(file) {
+            try? FileManager.default.removeItem(at: old)
+        }
         danceSongFile = nil
+    }
+
+    /// Picks one of Wakie's built-in dance tracks.
+    func selectBuiltInDanceTrack(_ file: String) {
+        removeDanceSong()
+        danceSongFile = file
     }
 
     // MARK: - World clock
 
     func addCity(_ city: WorldCity) {
         cities.append(city)
+        // No photo of their own: find one online.
+        if city.photoFile == nil && city.banner == nil {
+            Task { await fetchPhoto(for: city.id) }
+        }
+    }
+
+    /// Downloads a photo of the city and shows it on its card. Returns `true` on success.
+    @discardableResult
+    func fetchPhoto(for cityID: String) async -> Bool {
+        guard let city = cities.first(where: { $0.id == cityID }) else { return false }
+        // A fresh file name each time so the card reloads the new picture.
+        let file = "\(city.id.replacingOccurrences(of: "/", with: "-"))-\(UUID().uuidString.prefix(6)).jpg"
+        let saved = await CityPhotoFetcher.fetchAndSave(name: city.name, country: city.country, file: file)
+        guard saved else { return false }
+        setPhoto(file, for: cityID)
+        return true
+    }
+
+    /// Uses a photo the person picked from their library.
+    func setPhoto(data: Data, for cityID: String) {
+        guard let image = UIImage(data: data),
+              let jpeg = image.downscaled(maxDimension: 900).jpegData(compressionQuality: 0.85) else { return }
+        let file = "\(cityID.replacingOccurrences(of: "/", with: "-"))-\(UUID().uuidString.prefix(6)).jpg"
+        guard (try? jpeg.write(to: WorldCity.photosDirectory.appending(path: file))) != nil else { return }
+        setPhoto(file, for: cityID)
+    }
+
+    private func setPhoto(_ file: String, for cityID: String) {
+        guard let index = cities.firstIndex(where: { $0.id == cityID }) else { return }
+        if let old = cities[index].photoURL { try? FileManager.default.removeItem(at: old) }
+        cities[index].photoFile = file
+    }
+
+    /// Fetches photos for cities that have neither a photo nor built-in art (e.g. the starting cities).
+    private func fetchMissingCityPhotos() {
+        for city in cities where city.photoFile == nil && city.banner == nil {
+            Task { await fetchPhoto(for: city.id) }
+        }
     }
 
     /// Moves the cities with `ids` so they sit before `target` (or at the end when `nil`).

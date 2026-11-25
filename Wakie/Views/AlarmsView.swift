@@ -29,6 +29,14 @@ struct AlarmsView: View {
                             onDelete: { withAnimation(.snappy) { model.delete(alarm.id) } }
                         )
                         .onTapGesture { editingAlarm = alarm }
+                        // Swipe left to delete, like the Clock app.
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                withAnimation(.snappy) { model.delete(alarm.id) }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
                         .transition(.scale.combined(with: .opacity))
                     }
                 }
@@ -38,6 +46,7 @@ struct AlarmsView: View {
             .padding(.bottom, 40)
         }
         .scrollIndicators(.hidden)
+        .swipeActionsContainer()
         .background(AppBackground())
         .sheet(item: $editingAlarm) { alarm in
             EditAlarmView(alarm: alarm, isNew: false)
@@ -148,7 +157,7 @@ struct AlarmCard: View {
         }
         .padding(.vertical, 14)
         .padding(.horizontal, 16)
-        .wakieCard(radius: 30)
+        .liquidGlassCard(radius: 30)
         .contentShape(Rectangle())
         .accessibilityElement(children: .contain)
         .accessibilityHint("Double tap to edit")
@@ -262,6 +271,7 @@ struct PillSwitch: View {
             .labelsHidden()
             .tint(Theme.purple)
             .fixedSize()
+            .sensoryFeedback(.impact(weight: .medium), trigger: isOn)
     }
 }
 

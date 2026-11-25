@@ -38,14 +38,17 @@ nonisolated extension Color {
 
 nonisolated enum Theme {
     // Backgrounds
-    static let backgroundTop = Color.dynamic(day: 0xEDE4FF, night: 0x17123A)
-    static let backgroundBottom = Color.dynamic(day: 0xF8F4FF, night: 0x261E58)
+    // TESTING: night background uses the Day/Night toggle's night-sky colour (#001120).
+    // To revert, restore night: 0x17123A (top) and night: 0x261E58 (bottom).
+    static let backgroundTop = Color.dynamic(day: 0xEDE4FF, night: 0x001120)
+    static let backgroundBottom = Color.dynamic(day: 0xF8F4FF, night: 0x001120)
 
     // Surfaces
     static let card = Color.dynamic(day: 0xFFFFFF, night: 0x2E2766, dayOpacity: 0.82, nightOpacity: 0.92)
     static let cardStroke = Color.dynamic(day: 0xFFFFFF, night: 0x4B4296, dayOpacity: 0.9, nightOpacity: 0.6)
-    static let inset = Color.dynamic(day: 0xF1ECFF, night: 0x3A3278)
-    static let lavenderPill = Color.dynamic(day: 0xDCCFFF, night: 0x4A3F95)
+    /// Inner panels; translucent white at night so they sit softly on Liquid Glass.
+    static let inset = Color.dynamic(day: 0xF1ECFF, night: 0xFFFFFF, nightOpacity: 0.08)
+    static let lavenderPill = Color.dynamic(day: 0xDCCFFF, night: 0xFFFFFF, nightOpacity: 0.14)
 
     // Text
     static let ink = Color.dynamic(day: 0x1E1A3C, night: 0xFFFFFF)
@@ -277,9 +280,40 @@ struct CardBackground: ViewModifier {
     }
 }
 
+/// Fully transparent card. The background shows straight through; a light-catching rim
+/// (bright top-left, fading round the sides) gives it the look of a clear glass pane.
+struct ClearGlassCard: ViewModifier {
+    let radius: CGFloat
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        // White highlights on the night sky; soft dark ones on the light background.
+        let edge: Color = colorScheme == .dark ? .white : .black
+        content
+            .contentShape(shape)
+            .overlay(
+                shape.strokeBorder(
+                    LinearGradient(stops: [
+                        .init(color: edge.opacity(colorScheme == .dark ? 0.6 : 0.28), location: 0),
+                        .init(color: edge.opacity(0.06), location: 0.45),
+                        .init(color: edge.opacity(colorScheme == .dark ? 0.3 : 0.14), location: 1),
+                    ], startPoint: .topLeading, endPoint: .bottomTrailing),
+                    lineWidth: 1.2
+                )
+                .allowsHitTesting(false)
+            )
+    }
+}
+
 extension View {
     func wakieCard(radius: CGFloat = 28) -> some View {
         modifier(CardBackground(radius: radius))
+    }
+
+    /// A completely clear glass card: no fill, tint or frosting, just a fine edge highlight.
+    func liquidGlassCard(radius: CGFloat = 28) -> some View {
+        modifier(ClearGlassCard(radius: radius))
     }
 }
 
@@ -309,5 +343,7 @@ struct PressableStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .animation(.spring(duration: 0.25), value: configuration.isPressed)
+            // A light tap as the finger goes down.
+            .sensoryFeedback(.impact(weight: .light), trigger: configuration.isPressed) { _, pressed in pressed }
     }
 }

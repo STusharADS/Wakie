@@ -108,8 +108,12 @@ struct ShakyShakyView: View {
     @State private var music = AudioPreviewPlayer()
     /// Song from Settings that plays (looping) while the person dances.
     let songURL: URL?
+    /// A song from Apple Music, played through MusicKit instead of `songURL`.
+    let appleMusicSong: AppleMusicSong?
 
-    init(seconds: Int, songURL: URL?, onComplete: @escaping () -> Void, onFallback: @escaping () -> Void) {
+    init(seconds: Int, songURL: URL?, appleMusicSong: AppleMusicSong? = nil,
+         onComplete: @escaping () -> Void, onFallback: @escaping () -> Void) {
+        self.appleMusicSong = appleMusicSong
         self.onComplete = onComplete
         self.onFallback = onFallback
         self.songURL = songURL
@@ -162,14 +166,21 @@ struct ShakyShakyView: View {
         .onDisappear {
             camera.stop()
             music.stop()
+            if appleMusicSong != nil { AppleMusicDance.stop() }
         }
         .onChange(of: tracker.isRunning) { _, running in
-            if running, let songURL { music.play(songURL, loops: true) }
+            guard running else { return }
+            if let appleMusicSong {
+                Task { await AppleMusicDance.play(appleMusicSong) }
+            } else if let songURL {
+                music.play(songURL, loops: true)
+            }
         }
         .onChange(of: tracker.isComplete) { _, done in
             if done {
                 camera.stop()
                 music.stop()
+                if appleMusicSong != nil { AppleMusicDance.stop() }
                 onComplete()
             }
         }

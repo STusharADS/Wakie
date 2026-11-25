@@ -18,6 +18,7 @@ struct EditAlarmView: View {
     @State private var confirmDelete = false
     @State private var isPickingSound = false
     @State private var isAddingCity = false
+    @State private var isTypingTime = false
     let isNew: Bool
 
     private static let hourLabels = (1...12).map { String(format: "%02d", $0) }
@@ -99,25 +100,41 @@ struct EditAlarmView: View {
     // MARK: Time
 
     private var timePicker: some View {
-        HStack(spacing: 8) {
-            WheelColumn(labels: Self.hourLabels, selection: $hourIndex, accessibilityName: "Hour",
-                        width: 108, height: 104, itemHeight: 72, fontSize: 56)
-            Text(":")
-                .font(.wakie(44, .black))
-                .foregroundStyle(Theme.ink)
-                .accessibilityHidden(true)
-            WheelColumn(labels: Self.minuteLabels, selection: $minuteIndex, accessibilityName: "Minute",
-                        width: 108, height: 104, itemHeight: 72, fontSize: 56)
-            WheelColumn(labels: ["AM", "PM"], selection: $periodIndex, loops: false, accessibilityName: "AM or PM",
-                        width: 70, height: 64, itemHeight: 40, fontSize: 22)
-        }
-        .frame(maxWidth: .infinity)
-        .overlay(alignment: .topLeading) {
-            SparkleLines(size: 30)
-                .rotationEffect(.degrees(-40))
-                .offset(x: -6, y: -14)
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                // Tapping a number wheel opens a keypad; scrolling still works as before.
+                // Tall enough to show the values above and below, like the Clock app.
+                WheelColumn(labels: Self.hourLabels, selection: $hourIndex, accessibilityName: "Hour",
+                            width: 104, height: 190, itemHeight: 62, fontSize: 50,
+                            onTap: { isTypingTime = true })
+                Text(":")
+                    .font(.wakie(44, .black))
+                    .foregroundStyle(Theme.ink)
+                    .accessibilityHidden(true)
+                WheelColumn(labels: Self.minuteLabels, selection: $minuteIndex, accessibilityName: "Minute",
+                            width: 104, height: 190, itemHeight: 62, fontSize: 50,
+                            onTap: { isTypingTime = true })
+                // Tapping AM/PM simply flips it.
+                WheelColumn(labels: ["AM", "PM"], selection: $periodIndex, loops: false, accessibilityName: "AM or PM",
+                            width: 70, height: 130, itemHeight: 44, fontSize: 22,
+                            onTap: { periodIndex = 1 - periodIndex })
+            }
+            .frame(maxWidth: .infinity)
+            .overlay(alignment: .topLeading) {
+                SparkleLines(size: 30)
+                    .rotationEffect(.degrees(-40))
+                    .offset(x: -6, y: -14)
+            }
         }
         .padding(.top, 14)
+        .sheet(isPresented: $isTypingTime) {
+            TimeEntrySheet(hour: hourIndex + 1, minute: minuteIndex, isPM: periodIndex == 1) { hour, minute, isPM in
+                hourIndex = hour - 1
+                minuteIndex = minute
+                periodIndex = isPM ? 1 : 0
+            }
+            .presentationDetents([.height(320)])
+        }
     }
 
     // MARK: Time zone
@@ -264,7 +281,7 @@ struct EditAlarmView: View {
             isPickingSound = true
         } label: {
             HStack {
-                Text("Sound")
+                Text("Ringtone")
                     .font(.wakie(16, .bold))
                     .foregroundStyle(Theme.ink)
                 Spacer()
@@ -299,21 +316,28 @@ struct EditAlarmView: View {
                     .foregroundStyle(draft.snoozeMinutes == 0 ? Theme.inkSecondary : Theme.purple)
                     .contentTransition(.numericText())
             }
-            Slider(
-                value: Binding(
-                    get: { Double(draft.snoozeMinutes) },
-                    set: { draft.snoozeMinutes = Int($0.rounded()) }
-                ),
-                in: 0...5,
-                step: 1
-            ) {
-                Text("Snooze length")
-            } minimumValueLabel: {
-                Text("0").font(.wakie(12, .semibold)).foregroundStyle(Theme.inkSecondary)
-            } maximumValueLabel: {
-                Text("5").font(.wakie(12, .semibold)).foregroundStyle(Theme.inkSecondary)
+            if model.easyTimePicking {
+                HorizontalWheelPicker(values: Array(0...5), selection: $draft.snoozeMinutes,
+                                      accessibilityName: "Snooze length",
+                                      label: { $0 == 0 ? "Off" : "\($0)m" })
+            } else {
+                Slider(
+                    value: Binding(
+                        get: { Double(draft.snoozeMinutes) },
+                        set: { draft.snoozeMinutes = Int($0.rounded()) }
+                    ),
+                    in: 0...5,
+                    step: 1
+                ) {
+                    Text("Snooze length")
+                } minimumValueLabel: {
+                    Text("0").font(.wakie(12, .semibold)).foregroundStyle(Theme.inkSecondary)
+                } maximumValueLabel: {
+                    Text("5").font(.wakie(12, .semibold)).foregroundStyle(Theme.inkSecondary)
+                }
+                .tint(Theme.purple)
+                .sensoryFeedback(.selection, trigger: draft.snoozeMinutes)
             }
-            .tint(Theme.purple)
             Text(draft.snoozeMinutes == 0 ? "No snooze button. You have to do the mission." : "You can snooze once, then the mission is the only way out.")
                 .font(.wakie(12, .semibold))
                 .foregroundStyle(Theme.inkSecondary)
@@ -354,6 +378,7 @@ struct WheelColumn: View {
     let height: CGFloat
     let itemHeight: CGFloat
     let fontSize: CGFloat
+    var onTap: (() -> Void)?
 
     @State private var scrolledID: Int?
 
@@ -362,7 +387,8 @@ struct WheelColumn: View {
     private var repeatCount: Int { loops ? 100 : 1 }
 
     init(labels: [String], selection: Binding<Int>, loops: Bool = true, accessibilityName: String,
-         width: CGFloat, height: CGFloat, itemHeight: CGFloat, fontSize: CGFloat) {
+         width: CGFloat, height: CGFloat, itemHeight: CGFloat, fontSize: CGFloat, onTap: (() -> Void)? = nil) {
+        self.onTap = onTap
         self.labels = labels
         _selection = selection
         self.loops = loops
@@ -371,8 +397,11 @@ struct WheelColumn: View {
         self.height = height
         self.itemHeight = itemHeight
         self.fontSize = fontSize
-        let base = loops ? labels.count * 50 : 0 // middle of the 100 repeats
-        _scrolledID = State(initialValue: base + selection.wrappedValue)
+    }
+
+    /// Where the wheel starts: the selected value, in the middle of the repeats for looping wheels.
+    private var initialID: Int {
+        (loops ? labels.count * 50 : 0) + selection
     }
 
     var body: some View {
@@ -385,9 +414,10 @@ struct WheelColumn: View {
                         .foregroundStyle(.white)
                         .frame(width: width, height: itemHeight)
                         .scrollTransition(axis: .vertical) { content, phase in
+                            // Values above and below stay visible but dimmer and smaller.
                             content
-                                .opacity(phase.isIdentity ? 1 : 0.25)
-                                .scaleEffect(phase.isIdentity ? 1 : 0.7)
+                                .opacity(phase.isIdentity ? 1 : 0.4)
+                                .scaleEffect(phase.isIdentity ? 1 : 0.78)
                         }
                 }
             }
@@ -399,14 +429,38 @@ struct WheelColumn: View {
         .contentMargins(.vertical, (height - itemHeight) / 2, for: .scrollContent)
         .frame(width: width, height: height)
         .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(LinearGradient(colors: [Color(hex: 0x3A3458), Theme.timeBox], startPoint: .top, endPoint: .bottom))
+            ZStack {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(LinearGradient(colors: [Color(hex: 0x3A3458), Theme.timeBox], startPoint: .top, endPoint: .bottom))
+                // Selection band behind the chosen value.
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(.white.opacity(0.12))
+                    .frame(height: itemHeight)
+                    .padding(.horizontal, 6)
+            }
+        )
+        // Fade the top and bottom edges so it reads as a rolling drum.
+        .mask(
+            LinearGradient(stops: [.init(color: .black.opacity(0.35), location: 0),
+                                   .init(color: .black, location: 0.3),
+                                   .init(color: .black, location: 0.7),
+                                   .init(color: .black.opacity(0.35), location: 1)],
+                           startPoint: .top, endPoint: .bottom)
         )
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .shadow(color: Theme.timeBox.opacity(0.35), radius: 10, y: 6)
+        // Position once laid out; setting it up front lands one row off on tall wheels.
+        .onAppear { if scrolledID == nil { scrolledID = initialID } }
         .onChange(of: scrolledID) { _, newValue in
             if let newValue { selection = newValue % labels.count }
         }
+        // Follow changes made elsewhere (typed time, AM/PM tap) by scrolling to the nearest match.
+        .onChange(of: selection) { _, newValue in
+            guard let current = scrolledID, current % labels.count != newValue else { return }
+            let base = current - current % labels.count
+            withAnimation(.snappy) { scrolledID = base + newValue }
+        }
+        .onTapGesture { onTap?() }
         .sensoryFeedback(.selection, trigger: selection)
         .accessibilityRepresentation {
             Picker(accessibilityName, selection: $selection) {
@@ -415,6 +469,95 @@ struct WheelColumn: View {
                 }
             }
         }
+    }
+}
+
+/// Keypad entry for the alarm time: hour and minute boxes plus an AM/PM switch.
+struct TimeEntrySheet: View {
+    let onDone: (_ hour: Int, _ minute: Int, _ isPM: Bool) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var hourText: String
+    @State private var minuteText: String
+    @State private var isPM: Bool
+    @FocusState private var focused: Field?
+
+    private enum Field { case hour, minute }
+
+    init(hour: Int, minute: Int, isPM: Bool, onDone: @escaping (_ hour: Int, _ minute: Int, _ isPM: Bool) -> Void) {
+        self.onDone = onDone
+        _hourText = State(initialValue: String(hour))
+        _minuteText = State(initialValue: String(format: "%02d", minute))
+        _isPM = State(initialValue: isPM)
+    }
+
+    private var hour: Int? { Int(hourText).flatMap { (1...12).contains($0) ? $0 : nil } }
+    private var minute: Int? { Int(minuteText).flatMap { (0...59).contains($0) ? $0 : nil } }
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Text("Type a time")
+                .font(.wakie(20, .black))
+                .foregroundStyle(Theme.ink)
+            HStack(spacing: 10) {
+                numberField($hourText, field: .hour, placeholder: "7", isValid: hour != nil)
+                Text(":")
+                    .font(.wakie(44, .black))
+                    .foregroundStyle(Theme.ink)
+                numberField($minuteText, field: .minute, placeholder: "00", isValid: minute != nil)
+                Picker("AM or PM", selection: $isPM) {
+                    Text("AM").tag(false)
+                    Text("PM").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 100)
+            }
+            Button {
+                guard let hour, let minute else { return }
+                onDone(hour, minute, isPM)
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                dismiss()
+            } label: {
+                Text("Set time")
+                    .font(.wakie(17, .heavy))
+                    .foregroundStyle(Color(hex: 0x1E1A3C))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+                    .background(Capsule().fill(Theme.yellow))
+            }
+            .buttonStyle(PressableStyle())
+            .disabled(hour == nil || minute == nil)
+            .opacity(hour == nil || minute == nil ? 0.5 : 1)
+        }
+        .padding(24)
+        .onAppear { focused = .hour }
+        .onChange(of: hourText) { _, text in
+            // Jump to minutes once the hour is clearly complete.
+            if text.count == 2 || (text.count == 1 && (Int(text) ?? 0) > 1) { focused = .minute }
+        }
+        .sensoryFeedback(.selection, trigger: isPM)
+    }
+
+    private func numberField(_ text: Binding<String>, field: Field, placeholder: String, isValid: Bool) -> some View {
+        TextField(placeholder, text: text)
+            .keyboardType(.numberPad)
+            .focused($focused, equals: field)
+            .multilineTextAlignment(.center)
+            .font(.wakie(44, .black))
+            .monospacedDigit()
+            .foregroundStyle(.white)
+            .frame(width: 92, height: 76)
+            .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Theme.timeBox))
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(isValid ? Theme.yellow.opacity(focused == field ? 1 : 0) : Theme.danger, lineWidth: 3)
+            )
+            .onChange(of: text.wrappedValue) { _, new in
+                // Digits only, at most two.
+                let digits = String(new.filter(\.isNumber).prefix(2))
+                if digits != new { text.wrappedValue = digits }
+            }
+            .accessibilityLabel(field == .hour ? "Hour" : "Minute")
     }
 }
 

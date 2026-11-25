@@ -71,7 +71,8 @@ struct MissionView: View {
         let fallback = { withAnimation { mission = .blahBlah } }
         switch mission {
         case .shakyShaky:
-            ShakyShakyView(seconds: model.danceSeconds, songURL: model.danceSongURL, onComplete: complete, onFallback: fallback)
+            ShakyShakyView(seconds: model.danceSeconds, songURL: model.danceSongURL, appleMusicSong: model.danceAppleMusicSong,
+                           onComplete: complete, onFallback: fallback)
         case .pickiePicky:
             PickiePickyView(item: model.randomPickItem(), onComplete: complete, onFallback: fallback)
         case .blahBlah:

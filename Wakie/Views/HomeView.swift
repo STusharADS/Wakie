@@ -2,7 +2,7 @@
 //  HomeView.swift
 //  Wakie
 //
-//  Dashboard: greeting, day/night toggle, the next alarm, missions to try and stats.
+//  Dashboard: greeting, add-alarm button, the next alarm, missions to try and stats.
 //
 
 import SwiftUI
@@ -14,10 +14,9 @@ struct HomeView: View {
     @State private var editingAlarm: WakieAlarm?
 
     var body: some View {
-        @Bindable var model = model
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                header(isNight: $model.isNight)
+                header
                 upcomingCard
                 challenges
                 statsRow
@@ -38,7 +37,7 @@ struct HomeView: View {
 
     // MARK: Header
 
-    private func header(isNight: Binding<Bool>) -> some View {
+    private var header: some View {
         HStack(alignment: .top) {
             TimelineView(.everyMinute) { context in
                 HStack(alignment: .top, spacing: 2) {
@@ -51,8 +50,9 @@ struct HomeView: View {
                 }
             }
             Spacer()
-            DayNightToggle(isNight: isNight, width: 96)
-                .padding(.top, 8)
+            // Adding an alarm is the main thing people do here, so it gets the big pulsing button.
+            AddAlarmButton { editingAlarm = WakieAlarm() }
+                .padding(.top, 4)
         }
     }
 
@@ -106,7 +106,7 @@ struct HomeView: View {
                                 .foregroundStyle(Theme.ink)
                         }
                         HStack(spacing: 8) {
-                            Text(next.map { ringsInText(from: context.date, to: $0.date) } ?? "Tap to create your first alarm")
+                            Text(next.map { ringsInText(from: context.date, to: $0.date) } ?? "Tap the + above to add one")
                                 .font(.wakie(14, .semibold))
                                 .foregroundStyle(Theme.inkSecondary)
                             // The same ring time on the phone's own clock.
@@ -120,20 +120,24 @@ struct HomeView: View {
                         .minimumScaleFactor(0.8)
                     }
                     Spacer(minLength: 0)
-                    Image(systemName: next == nil ? "plus" : "pencil")
-                        .font(.system(size: 18, weight: .black))
-                        .foregroundStyle(Color(hex: 0x1E1A3C))
-                        .frame(width: 46, height: 46)
-                        .background(Circle().fill(Theme.yellow).shadow(color: Theme.yellowDeep.opacity(0.5), radius: 6, y: 3))
+                    if next != nil {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 18, weight: .black))
+                            .foregroundStyle(Color(hex: 0x1E1A3C))
+                            .frame(width: 46, height: 46)
+                            .background(Circle().fill(Theme.yellow).shadow(color: Theme.yellowDeep.opacity(0.5), radius: 6, y: 3))
+                    }
                 }
                 .padding(.horizontal, 22)
                 .padding(.vertical, 18)
                 .frame(maxWidth: .infinity)
-                .wakieCard(radius: 32)
+                .liquidGlassCard(radius: 32)
                 .overlay(alignment: .topTrailing) {
-                    MascotImage(mission: next?.alarm.mission ?? .shakyShaky, size: 64)
-                        .offset(x: -40, y: -46)
-                        .allowsHitTesting(false)
+                    if let next {
+                        MascotImage(mission: next.alarm.mission, size: 64)
+                            .offset(x: -70, y: -46)
+                            .allowsHitTesting(false)
+                    }
                 }
             }
             .buttonStyle(PressableStyle())
@@ -178,12 +182,18 @@ struct HomeView: View {
 
     // MARK: Stats
 
+    /// Plain read-only figures (no card or glass), so they don't look like buttons.
     private var statsRow: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 0) {
             StatCard(symbol: "flame.fill", tint: .orange, title: "Wake ups", value: "\(model.stats.wakeUps)", unit: "total")
+            Rectangle()
+                .fill(Theme.inkSecondary.opacity(0.3))
+                .frame(width: 1)
+                .padding(.vertical, 6)
             StatCard(symbol: "bolt.fill", tint: Theme.yellowDeep, title: "Avg time to wake", value: model.stats.averageText, unit: nil)
         }
         .fixedSize(horizontal: false, vertical: true)
+        .padding(.top, 4)
     }
 }
 
@@ -251,12 +261,51 @@ struct StatCard: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        // Fill the row's height so both stat cards match, however their text wraps.
+        .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .wakieCard(radius: 24)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Big yellow "+" with soft rings pulsing out of it, so the main action is hard to miss.
+struct AddAlarmButton: View {
+    let action: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var tapped = false
+
+    var body: some View {
+        Button {
+            tapped.toggle()
+            action()
+        } label: {
+            ZStack {
+                TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
+                    let t = context.date.timeIntervalSinceReferenceDate
+                    ZStack {
+                        ForEach(0..<2, id: \.self) { ring in
+                            let phase = (t / 1.8 + Double(ring) / 2).truncatingRemainder(dividingBy: 1)
+                            Circle()
+                                .stroke(Theme.yellow.opacity(0.7 * (1 - phase)), lineWidth: 3)
+                                .scaleEffect(1 + phase * 0.55)
+                        }
+                    }
+                    .frame(width: 64, height: 64)
+                }
+                Image(systemName: "plus")
+                    .font(.system(size: 30, weight: .black))
+                    .foregroundStyle(Color(hex: 0x1E1A3C))
+                    .frame(width: 64, height: 64)
+                    .background(Circle().fill(Theme.yellow).shadow(color: Theme.yellowDeep.opacity(0.6), radius: 10, y: 4))
+                    .phaseAnimator([1.0, 1.08, 1.0], trigger: reduceMotion ? 0 : 1) { content, scale in
+                        content.scaleEffect(scale)
+                    } animation: { _ in .easeInOut(duration: 0.5).delay(1.2) }
+            }
+            .frame(width: 90, height: 90)
+            .contentShape(Circle())
+        }
+        .buttonStyle(PressableStyle())
+        .sensoryFeedback(.impact(weight: .medium), trigger: tapped)
+        .accessibilityLabel("Add alarm")
     }
 }
 

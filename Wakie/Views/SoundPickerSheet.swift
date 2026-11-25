@@ -2,7 +2,7 @@
 //  SoundPickerSheet.swift
 //  Wakie
 //
-//  Choose the alarm sound: the system default or songs imported from Files.
+//  Choose the alarm sound: Wakie's own built-in tones or songs imported from Files.
 //
 
 import SwiftUI
@@ -21,7 +21,7 @@ struct SoundPickerSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Alarm Sound")
+                Text("Ringtone")
                     .font(.wakie(22, .heavy))
                     .foregroundStyle(Theme.ink)
                 Spacer()
@@ -34,12 +34,19 @@ struct SoundPickerSheet: View {
 
             ScrollView {
                 VStack(spacing: 10) {
-                    row(title: "Default", subtitle: "System alarm sound", file: nil)
+                    sectionLabel("Wakie sounds")
+                    ForEach(ToneLibrary.alarmTones) { tone in
+                        // The default tone is stored as "no pick", so it follows future default changes.
+                        row(title: tone.title, subtitle: tone.subtitle,
+                            file: tone.file == ToneLibrary.defaultAlarmFile ? nil : tone.file,
+                            previewFile: tone.file)
+                    }
+                    if !model.alarmSounds.isEmpty { sectionLabel("Your songs") }
                     ForEach(model.alarmSounds, id: \.self) { file in
                         row(title: AudioImporter.title(forFile: file), subtitle: "From your files", file: file)
                     }
                     addButton
-                    Text("Alarm sounds use the first 29 seconds of the song.")
+                    Text("Ringtones use the first 29 seconds of the song.")
                         .font(.wakie(12, .semibold))
                         .foregroundStyle(Theme.inkSecondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -71,9 +78,17 @@ struct SoundPickerSheet: View {
         }
     }
 
-    private func row(title: String, subtitle: String, file: String?) -> some View {
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.wakie(13, .heavy))
+            .foregroundStyle(Theme.inkSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 6)
+    }
+
+    private func row(title: String, subtitle: String, file: String?, previewFile: String? = nil) -> some View {
         let isSelected = selection == file
-        let url = file.map { AudioImporter.alarmSoundsDirectory.appending(path: $0) }
+        let url = (previewFile ?? file).map { AudioImporter.alarmSoundsDirectory.appending(path: $0) }
         return HStack(spacing: 12) {
             if let url {
                 Button {
@@ -95,6 +110,8 @@ struct SoundPickerSheet: View {
             }
             Button {
                 selection = file
+                // Preview what was just picked, so people hear their choice.
+                if let url, player.playingURL != url { player.toggle(url) }
             } label: {
                 HStack {
                     VStack(alignment: .leading, spacing: 0) {
@@ -117,7 +134,7 @@ struct SoundPickerSheet: View {
             }
             .buttonStyle(.plain)
             .accessibilityAddTraits(isSelected ? .isSelected : [])
-            if let file {
+            if let file, !ToneLibrary.isBuiltIn(file) {
                 Button {
                     if player.playingURL == url { player.stop() }
                     if selection == file { selection = nil }
@@ -133,6 +150,7 @@ struct SoundPickerSheet: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 58)
+        .sensoryFeedback(.selection, trigger: isSelected)
         .wakieCard(radius: 18)
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
